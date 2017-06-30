@@ -42,7 +42,7 @@ class MatrixFormattedGraph(object):
         # Generate the adjacency matrices.
         print('Generating adjcency matrices...')
         self.adj_matrices = self.generate_adjacency_matrices(self.metaedges)
-        print('Weighting matrices by degree with dampening factor {}...'.format(w))
+        print('\nWeighting matrices by degree with dampening factor {}...'.format(w))
         self.degree_weighted_matrices = self.generate_weighted_matrices(self.adj_matrices, self.w)
 
     def read_node_file(self):
@@ -155,9 +155,7 @@ class MatrixFormattedGraph(object):
 
         raise ValueError()
 
-
-
-    def calculate_dwpc(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=False):
+    def calculate_dwpc(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=False, n_jobs=1):
         """
         
         :param metapaths: 
@@ -166,6 +164,7 @@ class MatrixFormattedGraph(object):
         :param verbose: 
         :return: 
         """
+        from parallel import parallel_process
 
         # If not given a list of metapaths, calculate for all
         if not metapaths:
@@ -175,17 +174,36 @@ class MatrixFormattedGraph(object):
         start_nodes = self.validate_ids(start_nodes)
         end_nodes = self.validate_ids(end_nodes)
 
+        start_type = self.idx_to_metanode[start_nodes[0]]
+        end_type = self.idx_to_metanode[end_nodes[0]]
+
         print('Calculating DWPCs...')
-        dwpcs = dict()
-        for metapath in tqdm(metapaths):
-            dwpcs[metapath] = mt.count_paths(metapath=metapath, matrices=self.degree_weighted_matrices,
-                                             metapaths=self.metapaths, verbose=verbose)
-        print('Reformating results...')
+
+        # Prepare functions for parallel processing
+        arguments = []
+        mps = list(self.metapaths.keys())
+        for mp in mps:
+            arguments.append({'metapath':mp, 'metapaths': self.metapaths, 'verbose': verbose,
+                              'matrices': self.degree_weighted_matrices})
+        # Run DPWC calculation processes in parallel
+        result = parallel_process(array=arguments, function=mt.count_paths, use_kwargs=True, n_jobs=n_jobs, front_num=0)
+
+        # Format the matrices into a DataFrame
+        print('\nReformating results...')
+        # Turn to a dictionary
+        dwpcs = {mp: res for mp, res in zip(mps, result)}
         results = pd.DataFrame()
         for metapath, dwpc in tqdm(dwpcs.items()):
-            results[metapath] = self.to_series(dwpc, start_nodes, end_nodes)
+            results[metapath] = self.to_series(dwpc, start_nodes=start_nodes, end_nodes=end_nodes)
 
-        return results.reset_index(drop=False)
+        # Fix column names to correspond to proper metanode_ids
+        start_name = start_type.lower() + '_id'
+        end_name = end_type.lower() + '_id'
+
+        results = results.reset_index(drop=False)
+        results = results.rename(columns={'level_0': start_name, 'level_1': end_name})
+
+        return results
 
     def calculate_degrees(self, start_nodes=None, end_nodes=None):
         """
@@ -198,6 +216,9 @@ class MatrixFormattedGraph(object):
         # Validate that we either have a list of nodeids, a list of indices, or a string of metanode
         start_nodes = self.validate_ids(start_nodes)
         end_nodes = self.validate_ids(end_nodes)
+
+        start_type = self.idx_to_metanode[start_nodes[0]]
+        end_type = self.idx_to_metanode[end_nodes[0]]
 
         result = pd.DataFrame()
 
@@ -217,7 +238,12 @@ class MatrixFormattedGraph(object):
                 edge_name = mt.get_reverse_undirected_edge(edge)
                 result[edge_name] = self.to_series(degrees, node_type, node_type)
 
-        return result.reset_index(drop=False)
+        start_name = start_type.lower() + '_id'
+        end_name = end_type.lower() + '_id'
+
+        result = result.reset_index(drop=False)
+        result = result.rename(columns={'level_0': start_name, 'level_1': end_name})
+        return result
 
     def to_series(self, dwpc, start_nodes, end_nodes):
         """
