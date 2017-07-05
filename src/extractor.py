@@ -1,4 +1,5 @@
 import json
+import time
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -8,22 +9,22 @@ import matrix_tools as mt
 
 class MatrixFormattedGraph(object):
     """
-    Class for adjacency matrix representation of the heterogeneious network. 
+    Class for adjacency matrix representation of the heterogeneious network.
     """
 
     def __init__(self, node_file, edge_file, metapaths_file, w=0.4):
         """
-        Class for adjacency matrix representation of the heterogeneious network.
-        
-        :param node_file: string, location of the .csv file containing nodes formatted for neo4j import.  
-            This format must include two required columns: One column labeled ':ID' with the unique id for each node, 
+        Initializes the adjcency matricies used for feature extraction.
+
+        :param node_file: string, location of the .csv file containing nodes formatted for neo4j import.
+            This format must include two required columns: One column labeled ':ID' with the unique id for each node,
             and one column named ':LABEL' containing the metanode type for each node
         :param edge_file: string, location of the .csv file containing edges formatted for neo4j import.
             This format must inculde three required columns: One column labeled  ':START_ID' with the node id
             for the start of the edge, one labeled ':END_ID' with teh node id for the end of the edge and one
             labeled ':TYPE' descrbing the metaedge type.
         :param metapaths_file: string, location of the metapaths.json file that contains information on all the
-            metapaths to be extracted.  This file must contain the following keys: 'edge_abbreviation' which matches 
+            metapaths to be extracted.  This file must contain the following keys: 'edge_abbreviation' which matches
             the same format as ':TYPE' in the edge_file, 'edges' lists of each edge in the metapath
         :param w: float between 0 and 1. Dampening factor for producing degree-weighted matricies
         """
@@ -41,8 +42,10 @@ class MatrixFormattedGraph(object):
 
         # Generate the adjacency matrices.
         print('Generating adjcency matrices...')
+        time.sleep(0.5)
         self.adj_matrices = self.generate_adjacency_matrices(self.metaedges)
         print('\nWeighting matrices by degree with dampening factor {}...'.format(w))
+        time.sleep(0.5)
         self.degree_weighted_matrices = self.generate_weighted_matrices(self.adj_matrices, self.w)
 
     def read_node_file(self):
@@ -141,9 +144,9 @@ class MatrixFormattedGraph(object):
     def validate_ids(self, ids):
         """
         Ensures that a given id is either a Node type, list of node ids, or list of node indices.
-        
-        :param ids: string or list of strings or ints. The ids to be validated 
-        :return: 
+
+        :param ids: string or list of strings or ints. The ids to be validated
+        :return: list, the indicies corresponding to the ids in the matricies.
         """
         if type(ids) == str:
             return self.metanode_idxs[ids]
@@ -157,12 +160,19 @@ class MatrixFormattedGraph(object):
 
     def calculate_dwpc(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=False, n_jobs=1):
         """
-        
-        :param metapaths: 
-        :param start_nodes: 
-        :param end_nodes: 
-        :param verbose: 
-        :return: 
+        Extracts DWPC metrics for the given metapaths.  If no metapaths are given, will default to those listed in 'metapaths.json'
+
+        :param metapaths: list or None, the metapaths paths to calculate DWPC values for.  List must be a subset of those
+            found in metapahts.json.  If None, will calcualte DWPC values for all metapaths in the metapaths.json file.
+        :param start_nodes: String or list, String title of the metanode of the nodes for the start of the metapaths.  If a list,
+            can be IDs or indicies corresponding to a subset of starting nodes for the DWPC.
+        :param end_nodes: String or list, String title of the metanode of the nodes for the end of the metapaths.  If a list,
+            can be IDs or indicies corresponding to a subset of ending nodes for the DWPC.
+        :param verbose: boolean, if True, prints debugging text for calculating each DWPC. (not optimized for parallel processing).
+        :param n_jobs: int, the number of jobs to use for parallel processing.
+
+        :return: pandas.DataFrame. Table of results with columns corresponding to DWPC values from start_id to end_id
+            for each metapath.
         """
         from parallel import parallel_process
 
@@ -178,6 +188,7 @@ class MatrixFormattedGraph(object):
         end_type = self.idx_to_metanode[end_nodes[0]]
 
         print('Calculating DWPCs...')
+        time.sleep(0.5)
 
         # Prepare functions for parallel processing
         arguments = []
@@ -190,6 +201,7 @@ class MatrixFormattedGraph(object):
 
         # Format the matrices into a DataFrame
         print('\nReformating results...')
+        time.sleep(0.5)
         # Turn to a dictionary
         dwpcs = {mp: res for mp, res in zip(mps, result)}
         results = pd.DataFrame()
@@ -207,11 +219,11 @@ class MatrixFormattedGraph(object):
 
     def calculate_degrees(self, start_nodes=None, end_nodes=None):
         """
-        
-        :param metapaths: 
-        :param start_nodes: 
-        :param end_nodes: 
-        :return: 
+
+        :param metapaths:
+        :param start_nodes:
+        :param end_nodes:
+        :return:
         """
         # Validate that we either have a list of nodeids, a list of indices, or a string of metanode
         start_nodes = self.validate_ids(start_nodes)
@@ -245,15 +257,17 @@ class MatrixFormattedGraph(object):
         result = result.rename(columns={'level_0': start_name, 'level_1': end_name})
         return result
 
-    def to_series(self, dwpc, start_nodes, end_nodes):
+    def to_series(self, result, start_nodes, end_nodes):
         """
-        
-        :param dwpc: 
-        :param start_nodes: 
-        :param end_nodes: 
-        :return: 
+        Convert a result matrix (containing pc, dwpc, degree values) to a Series with multiindex start_id, end_id.
+
+        :param result: Sparse matrix containing the caluclation's result.
+        :param start_nodes: list of IDs corresponding to the start of the path
+        :param end_nodes:
+
+        :return: pandas.Series, with multi-index start_id, end_ide and values corresponding to the metric calulated.
         """
-        dat = pd.DataFrame(dwpc.todense()[start_nodes, :][:, end_nodes],
+        dat = pd.DataFrame(result.todense()[start_nodes, :][:, end_nodes],
                            index=[self.index_to_nid[sid] for sid in start_nodes],
                            columns=[self.index_to_nid[eid] for eid in end_nodes])
         return dat.stack()
