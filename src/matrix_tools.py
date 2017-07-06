@@ -520,3 +520,25 @@ def count_paths(path, edges, matrices, verbose=False, uncountable_estimate_func=
     else:
         print("Something went wrong.....", path)
 
+
+def to_series(result, start_nodes, end_nodes, index_to_id, name=None):
+    """
+    Convert a result matrix (containing pc, dwpc, degree values) to a Series with multiindex start_id, end_id.
+
+    :param result: Sparse matrix containing the caluclation's result.
+    :param start_nodes: list of indices corresponding to the start of the path
+    :param end_nodes: list of indices corresponding to the end of the path
+    :param index_to_id: dict, to map the indices to an id
+    :param name: string, name for the returned Series
+
+    :return: pandas.Series, with multi-index start_id, end_ide and values corresponding to the metric calulated.
+    """
+    dat = pd.DataFrame(result.todense()[start_nodes, :][:, end_nodes],
+                       index=[index_to_id[sid] for sid in start_nodes],
+                       columns=[index_to_id[eid] for eid in end_nodes])
+
+    # Convert to series
+    series = dat.stack()
+    series.name = name
+
+    return series

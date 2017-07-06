@@ -60,7 +60,7 @@ class MatrixFormattedGraph(object):
         self.adj_matrices = self.generate_adjacency_matrices(self.metaedges)
         print('\nWeighting matrices by degree with dampening factor {}...'.format(w))
         time.sleep(0.5)
-        self.degree_weighted_matrices = self.generate_weighted_matrices(self.adj_matrices, self.w)
+        self.degree_weighted_matrices = self.generate_weighted_matrices()
 
     def read_node_file(self):
         self.node_df = pd.read_csv(self.node_file, dtype={':ID': str})
@@ -148,7 +148,7 @@ class MatrixFormattedGraph(object):
 
             return {**node_abbrev_dict, **edge_abbrev_dict}
 
-        print('Generating Metagraph...')
+        print('Initializing metagraph...')
         edge_tuples = get_tuples(self.edge_df[':START_ID'], self.edge_df[':END_ID'], self.edge_df[':TYPE'])
         abbrev_dict = get_abbrev_dict()
 
@@ -220,16 +220,16 @@ class MatrixFormattedGraph(object):
 
         return adjacency_matrices
 
-    def generate_weighted_matrices(self, adj_matrices, w):
+    def generate_weighted_matrices(self):
 
         weighted_matrices = dict()
-        for metaedge, matrix in tqdm(adj_matrices.items()):
+        for metaedge, matrix in tqdm(self.adj_matrices.items()):
             # Directed
             if '>' in metaedge or '<' in metaedge:
-                weighted_matrices[metaedge] = mt.weight_by_degree(matrix, w=w, directed=True)
+                weighted_matrices[metaedge] = mt.weight_by_degree(matrix, w=self.w, directed=True)
             # Undirected
             else:
-                weighted_matrices[metaedge] = mt.weight_by_degree(matrix, w=w, directed=False)
+                weighted_matrices[metaedge] = mt.weight_by_degree(matrix, w=self.w, directed=False)
         return weighted_matrices
 
     def validate_ids(self, ids):
@@ -292,12 +292,16 @@ class MatrixFormattedGraph(object):
         # Format the matrices into a DataFrame
         print('\nReformating results...')
         time.sleep(0.5)
-        # Turn to a dictionary
-        dwpcs = {mp: res for mp, res in zip(metapaths, result)}
-        results = pd.DataFrame()
 
-        for metapath, dwpc in tqdm(dwpcs.items()):
-            results[metapath] = self.to_series(dwpc, start_nodes=start_idxs, end_nodes=end_idxs)
+        # Prep the Series conversion for parallel processing
+        arguments = []
+        for mp, dwpc in zip(metapaths, result):
+            arguments.append({'result': dwpc, 'start_nodes': start_idxs, 'end_nodes': end_idxs,
+                              'name': mp, 'index_to_id': self.index_to_nid})
+
+        # Process and convert results to a DataFrame
+        result = parallel_process(array=arguments, function=mt.to_series, use_kwargs=True, n_jobs=n_jobs, front_num=0)
+        results = pd.DataFrame(result).T
 
         # Fix column names to correspond to proper metanode_ids
         start_name = start_type.lower() + '_id'
@@ -336,10 +340,10 @@ class MatrixFormattedGraph(object):
 
             node_type = self.idx_to_metanode[degree_for[0]]
             if node_type[0] == edge[0]:
-                result[edge] = self.to_series(degrees, node_type, node_type)
+                result[edge] = mt.to_series(degrees, node_type, node_type, self.index_to_nid)
             else:
                 edge_name = mt.get_reverse_undirected_edge(edge)
-                result[edge_name] = self.to_series(degrees, node_type, node_type)
+                result[edge_name] = mt.to_series(degrees, node_type, node_type, self.index_to_nid)
 
         start_name = start_type.lower() + '_id'
         end_name = end_type.lower() + '_id'
@@ -347,18 +351,3 @@ class MatrixFormattedGraph(object):
         result = result.reset_index(drop=False)
         result = result.rename(columns={'level_0': start_name, 'level_1': end_name})
         return result
-
-    def to_series(self, result, start_nodes, end_nodes):
-        """
-        Convert a result matrix (containing pc, dwpc, degree values) to a Series with multiindex start_id, end_id.
-
-        :param result: Sparse matrix containing the caluclation's result.
-        :param start_nodes: list of IDs corresponding to the start of the path
-        :param end_nodes:
-
-        :return: pandas.Series, with multi-index start_id, end_ide and values corresponding to the metric calulated.
-        """
-        dat = pd.DataFrame(result.todense()[start_nodes, :][:, end_nodes],
-                           index=[self.index_to_nid[sid] for sid in start_nodes],
-                           columns=[self.index_to_nid[eid] for eid in end_nodes])
-        return dat.stack()
