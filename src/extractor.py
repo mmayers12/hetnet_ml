@@ -1,44 +1,58 @@
+import re
 import json
 import time
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from scipy.sparse import diags
+from hetio.hetnet import MetaGraph
 import matrix_tools as mt
 
 
 class MatrixFormattedGraph(object):
     """
-    Class for adjacency matrix representation of the heterogeneious network.
+    Class for adjacency matrix representation of the heterogeneous network.
     """
 
-    def __init__(self, node_file, edge_file, metapaths_file, w=0.4):
+    def __init__(self, node_file, edge_file, start_kind='Compound', end_kind='Disease',
+                 max_length=4, metapaths_file=None, w=0.4):
         """
-        Initializes the adjcency matricies used for feature extraction.
+        Initializes the adjacency matrices used for feature extraction.
 
         :param node_file: string, location of the .csv file containing nodes formatted for neo4j import.
             This format must include two required columns: One column labeled ':ID' with the unique id for each node,
             and one column named ':LABEL' containing the metanode type for each node
         :param edge_file: string, location of the .csv file containing edges formatted for neo4j import.
-            This format must inculde three required columns: One column labeled  ':START_ID' with the node id
+            This format must include three required columns: One column labeled  ':START_ID' with the node id
             for the start of the edge, one labeled ':END_ID' with teh node id for the end of the edge and one
-            labeled ':TYPE' descrbing the metaedge type.
+            labeled ':TYPE' describing the metaedge type.
+        :param start_kind: string, the source metanode. The node type from which the target edge to be predicted 
+            as well as all metapaths originate.
+        :param end_kind: string, the target metanode. The node type to which the target edge to be predicted 
+            as well as all metapaths terminate. 
+        :param max_length: int, the maximum length of metapaths to be extracted by this feature extractor.
         :param metapaths_file: string, location of the metapaths.json file that contains information on all the
-            metapaths to be extracted.  This file must contain the following keys: 'edge_abbreviation' which matches
-            the same format as ':TYPE' in the edge_file, 'edges' lists of each edge in the metapath
-        :param w: float between 0 and 1. Dampening factor for producing degree-weighted matricies
+            metapaths to be extracted.  If provided, this will be used to generate metapath information and
+            the variables `start_kind`, `end_kind` and `max_length` will be ignored.  
+            This file must contain the following keys: 'edge_abbreviations' and 'standard_edge_abbreviations' which 
+            matches the same format as ':TYPE' in the edge_file, 'edges' lists of each edge in the metapath. 
+        :param w: float between 0 and 1. Dampening factor for producing degree-weighted matrices
         """
         # Store the values of the different files
         self.node_file = node_file
         self.edge_file = edge_file
         self.metapaths_file = metapaths_file
         self.w = w
+        self.metagraph = None
 
         # Read the information in the files
         print('Reading file information...')
         self.read_node_file()
         self.read_edge_file()
-        self.read_metapaths_file()
+        if self.metapaths_file:
+            self.read_metapaths_file()
+        else:
+            self.get_metapaths(start_kind, end_kind, max_length)
 
         # Generate the adjacency matrices.
         print('Generating adjcency matrices...')
@@ -65,11 +79,17 @@ class MatrixFormattedGraph(object):
     def read_edge_file(self):
         self.edge_df = pd.read_csv(self.edge_file, dtype={':START_ID': str, ':END_ID': str})
 
-        # Fix the edge abbreviations if full name is included
+        # Split the metaedge name from its abbreviation if both are included
         if sum(self.edge_df[':TYPE'].str.contains('_')) != 0:
-            self.edge_df[':TYPE'] = self.edge_df[':TYPE'].str.split('_', expand=True).iloc[:, -1]
+            long_abbrev = self.edge_df[':TYPE'].str.split('_', expand=True)
+            self.metaedge_names = long_abbrev.iloc[:, 0].unique()
+            self.metaedges = long_abbrev.iloc[:, 1].unique()
+            self.edge_df['abbrev'] = long_abbrev.iloc[:, 1]
 
-        self.metaedges = self.edge_df[':TYPE'].unique()
+        else:
+            self.metaedge_names = None
+            self.metaedges = self.edge_df[':TYPE'].unique()
+            self.edge_df['abbrev'] = self.edge_df[':TYPE']
 
     def read_metapaths_file(self):
         # Read the metapaths
@@ -80,6 +100,78 @@ class MatrixFormattedGraph(object):
         self.metapaths = dict()
         for mp in mps:
             self.metapaths[mp['abbreviation']] = {k:v for k, v in mp.items() if k != 'abbreviation'}
+
+    def get_metagraph(self):
+
+        def get_tuples(start_ids, end_ids, types):
+
+            def get_direction(t):
+                if '>' in t:
+                    return 'forward'
+                elif '<' in t:
+                    return 'reverse'
+                else:
+                    return 'both'
+
+            start_kinds = start_ids.apply(lambda s: self.idx_to_metanode[self.nid_to_index[s]])
+            end_kinds = end_ids.apply(lambda e: self.idx_to_metanode[self.nid_to_index[e]])
+
+            tuples_df = pd.DataFrame()
+            tuples_df['start_kind'] = start_kinds
+            tuples_df['end_kind'] = end_kinds
+            tuples_df['types'] = types
+
+            tuples_df = tuples_df.drop_duplicates()
+
+            tuples_df['edge'] = tuples_df['types'].str.split('_', expand=True)[0]
+            tuples_df['direction'] = tuples_df['types'].apply(get_direction)
+
+            tuple_columns = ['start_kind', 'end_kind', 'edge', 'direction']
+
+            tuples = [tuple(r) for r in tuples_df[tuple_columns].itertuples(index=False)]
+
+            return tuples
+
+        def get_abbrev_dict():
+            node_kinds = self.node_df[':LABEL'].unique()
+            edge_kinds = self.metaedge_names
+
+            node_abbrevs = [''.join([w[0].upper() for w in re.split('[ -]', t)]) for t in node_kinds]
+            edge_abbrevs = [''.join([w[0].lower() for w in t.split('-')]) for t in edge_kinds]
+
+            node_abbrev_dict = {t: a for t, a in zip(node_kinds, node_abbrevs)}
+            edge_abbrev_dict = {t: a for t, a in zip(edge_kinds, edge_abbrevs)}
+
+            # Fix an edge case wrt Rephetio
+            if 'Pathway' in node_abbrev_dict:
+                node_abbrev_dict['Pathway'] = 'PW'
+
+            return {**node_abbrev_dict, **edge_abbrev_dict}
+
+        print('Generating Metagraph...')
+        edge_tuples = get_tuples(self.edge_df[':START_ID'], self.edge_df[':END_ID'], self.edge_df[':TYPE'])
+        abbrev_dict = get_abbrev_dict()
+
+        self.metagraph = MetaGraph.from_edge_tuples(edge_tuples, abbrev_dict)
+
+    def get_metapaths(self, start_kind, end_kind, max_length):
+
+        if not self.metagraph:
+            self.get_metagraph()
+
+        metapaths = self.metagraph.extract_metapaths(start_kind, end_kind, max_length)
+
+        self.metapaths = dict()
+        for mp in metapaths:
+            if len(mp) == 1:
+                continue
+            mp_info = dict()
+            mp_info['length'] = len(mp)
+            mp_info['edges'] = [str(x) for x in mp.edges]
+            mp_info['edge_abbreviations'] = [x.get_abbrev() for x in mp.edges]
+            mp_info['standard_edge_abbreviations'] = [x.get_standard_abbrev() for x in mp.edges]
+            self.metapaths[str(mp)] = mp_info
+
 
     def get_adj_matrix(self, metaedge, directed=False):
         """
@@ -97,8 +189,8 @@ class MatrixFormattedGraph(object):
         mat = diags(mat).tolil()
 
         # Find the start and end nodes for edges of the given type
-        start = self.edge_df[self.edge_df[':TYPE'] == metaedge][':START_ID'].apply(lambda s: self.nid_to_index[s])
-        end = self.edge_df[self.edge_df[':TYPE'] == metaedge][':END_ID'].apply(lambda s: self.nid_to_index[s])
+        start = self.edge_df[self.edge_df['abbrev'] == metaedge][':START_ID'].apply(lambda s: self.nid_to_index[s])
+        end = self.edge_df[self.edge_df['abbrev'] == metaedge][':END_ID'].apply(lambda s: self.nid_to_index[s])
 
         # Add edges to the matrix
         for s, e in zip(start, end):
@@ -181,19 +273,18 @@ class MatrixFormattedGraph(object):
             metapaths = list(self.metapaths.keys())
 
         # Validate that we either have a list of nodeids, a list of indices, or a string of metanode
-        start_nodes = self.validate_ids(start_nodes)
-        end_nodes = self.validate_ids(end_nodes)
+        start_idxs = self.validate_ids(start_nodes)
+        end_idxs = self.validate_ids(end_nodes)
 
-        start_type = self.idx_to_metanode[start_nodes[0]]
-        end_type = self.idx_to_metanode[end_nodes[0]]
+        start_type = self.idx_to_metanode[start_idxs[0]]
+        end_type = self.idx_to_metanode[end_idxs[0]]
 
         print('Calculating DWPCs...')
         time.sleep(0.5)
 
         # Prepare functions for parallel processing
         arguments = []
-        mps = list(self.metapaths.keys())
-        for mp in mps:
+        for mp in metapaths:
             arguments.append({'metapath':mp, 'metapaths': self.metapaths, 'verbose': verbose,
                               'matrices': self.degree_weighted_matrices})
         # Run DPWC calculation processes in parallel
@@ -203,10 +294,11 @@ class MatrixFormattedGraph(object):
         print('\nReformating results...')
         time.sleep(0.5)
         # Turn to a dictionary
-        dwpcs = {mp: res for mp, res in zip(mps, result)}
+        dwpcs = {mp: res for mp, res in zip(metapaths, result)}
         results = pd.DataFrame()
+
         for metapath, dwpc in tqdm(dwpcs.items()):
-            results[metapath] = self.to_series(dwpc, start_nodes=start_nodes, end_nodes=end_nodes)
+            results[metapath] = self.to_series(dwpc, start_nodes=start_idxs, end_nodes=end_idxs)
 
         # Fix column names to correspond to proper metanode_ids
         start_name = start_type.lower() + '_id'

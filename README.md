@@ -1,6 +1,6 @@
 # hetnet-ml
 
-Software to quickly extract features from heterogenous networks for machine learning.
+Software to quickly extract features from heterogeneous networks for machine learning.
 
 ## Requirments
 
