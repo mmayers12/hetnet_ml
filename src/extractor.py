@@ -172,7 +172,6 @@ class MatrixFormattedGraph(object):
             mp_info['standard_edge_abbreviations'] = [x.get_standard_abbrev() for x in mp.edges]
             self.metapaths[str(mp)] = mp_info
 
-
     def get_adj_matrix(self, metaedge, directed=False):
         """
         Create a sparse adjacency matrix for the given metaedge.
@@ -285,8 +284,8 @@ class MatrixFormattedGraph(object):
         # Prepare functions for parallel processing
         arguments = []
         for mp in metapaths:
-            arguments.append({'metapath':mp, 'metapaths': self.metapaths, 'verbose': verbose,
-                              'matrices': self.degree_weighted_matrices})
+            arguments.append({'path': mt.get_path(mp, self.metapaths), 'edges': mt.get_edge_names(mp, self.metapaths),
+                              'verbose': verbose, 'matrices': self.degree_weighted_matrices})
         # Run DPWC calculation processes in parallel
         result = parallel_process(array=arguments, function=mt.count_paths, use_kwargs=True, n_jobs=n_jobs, front_num=0)
 

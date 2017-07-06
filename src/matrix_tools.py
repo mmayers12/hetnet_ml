@@ -142,20 +142,18 @@ def weight_by_degree(matrix, w=0.4, directed=False):
     return matrix_out.tocsc()
 
 
-def count_walks(metapath, metapaths, matrices):
+def count_walks(path, matrices):
     """
     Calculates either WC or DWWC depending on wither an adj. or weighted matrix is passed. Walks essentially
     allow repeated visits to the same node, whereas paths do not.
     
-    :param metapath: list, the abbreviations for each metaedge of the metapath to be followed.
-    :param metapaths: dict, the information on each metapath
+    :param path: list, the abbreviations for each metaedge of the metapath to be followed.
     :param matrices: The dictionary of sparse matrices to be used to calculate.  If a simple adjacency matrix,
         will give Walk Count, but if a matrices are weighted by degree will give Degree Weighted Walk Count
 
     :return: The matrix giving the number of walks, where matrix[i, j], the ith node is the starting node and the
         jth node is the ending node
     """
-    path = get_path(metapath, metapaths)
     size = matrices[path[0]].shape[0]
 
     # initialize result with identity matrix
@@ -307,7 +305,7 @@ def count_removing_repeats(repeat_indices, matrices):
     return np.prod(to_multiply)
 
 
-def count_paths_removing_repeated_type(metapath, metapaths, matrices, repeat_type, default_to_max=False):
+def count_paths_removing_repeated_type(path, edges, matrices, repeat_type, default_to_max=False):
     """
     Counts paths removing repeats due to only one repeated metanode in the metapath.
 
@@ -316,7 +314,7 @@ def count_paths_removing_repeated_type(metapath, metapaths, matrices, repeat_typ
     in list order, identified as being repeated. A flag to default to the metanode type with the most repeats
     can be used if no given types are found.
 
-    :param metapath: String representation of metapath to count paths for
+    :param path: String representation of metapath to count paths for
     :param matrices: Dictionary of the matrices to use for calculation
         (e.g. degree weighted or standard adjacency)
     :param repeat_type: String or list, the metanode type to remove repeats from.
@@ -324,11 +322,10 @@ def count_paths_removing_repeated_type(metapath, metapaths, matrices, repeat_typ
 
     :return: Sparse Matrix, containing path counts along the metapath.
     """
-    path = get_path(metapath, metapaths)
-    to_multiply = [matrices[edge] for edge in path]
 
-    edge_names = get_edge_names(metapath, metapaths)
-    repeated_nodes = find_repeated_node_indices(edge_names)
+    # Initalize values
+    to_multiply = [matrices[edge] for edge in path]
+    repeated_nodes = find_repeated_node_indices(edges)
 
     # Find indices for the locations of repeated nodes
     repeat_indices = []
@@ -403,7 +400,7 @@ def interpolate_overcounting(extra_counts):
     return (get_elementwise_max(extra_counts) + sum(extra_counts)) / 2
 
 
-def estimate_count_from_repeats(metapath, metapaths, matrices, resolving_function=interpolate_overcounting):
+def estimate_count_from_repeats(path, edges, matrices, resolving_function=interpolate_overcounting):
     """
     Estimates the Path-Count based on the differnece between the Walk-Count and the Path-Count removing
     repated nodes for each metanode type individually.
@@ -412,17 +409,15 @@ def estimate_count_from_repeats(metapath, metapaths, matrices, resolving_functio
     resolving_function to estimate the overcounting via walks.  If this value ends up being greater
     than the total walk-count, the Path-Count is set to zero.
 
-    :param metapath: String representation of metapath to count paths for
+    :param path: String representation of metapath to count paths for
     :param matrices: Dictionary of the matrices to use for calculation
         (e.g. degree weighted or standard adjacency)
     :param resolving_function: function to determine the error.  Default: sum()
     """
 
-    path = get_path(metapath, metapaths)
+    # Initialize values
     to_multiply = [matrices[edge] for edge in path]
-
-    edge_names = get_edge_names(metapath, metapaths)
-    repeated_nodes = find_repeated_node_indices(edge_names)
+    repeated_nodes = find_repeated_node_indices(edges)
 
     repeat_indices = [v for v in repeated_nodes.values()]
 
@@ -449,8 +444,8 @@ def estimate_count_from_repeats(metapath, metapaths, matrices, resolving_functio
     return result
 
 
-def count_paths(metapath, metapaths, matrices, verbose=False,
-                uncountable_estimate_func=estimate_count_from_repeats, uncountable_params=None):
+def count_paths(path, edges, matrices, verbose=False, uncountable_estimate_func=estimate_count_from_repeats,
+                uncountable_params=None):
     """
     Counts paths removing repeats due to only one repeated metanode in the metapath.
 
@@ -459,8 +454,8 @@ def count_paths(metapath, metapaths, matrices, verbose=False,
     in list order, identified as being repeated. A flag to default to the metanode type with the most repeats
     can be used if no given types are found.
 
-    :param metapath: String representation of metapath to count paths for
-    :param metapaths: Dictionary with information on each metapath
+    :param path: String representation of metapath to count paths for
+    :param edges: Dictionary with information on each metapath
     :param matrices: Dictionary of the matrices to use for calculation
         (e.g. degree weighted or standard adjacency)
     :param verbose: boolean, if True, prints results of decision tree logic.
@@ -473,11 +468,8 @@ def count_paths(metapath, metapaths, matrices, verbose=False,
     :return: Sparse Matrix, containing path counts along the metapath.
     """
 
-    path = get_path(metapath, metapaths)
     to_multiply = [matrices[edge] for edge in path]
-
-    edge_names = get_edge_names(metapath, metapaths)
-    repeated_nodes = find_repeated_node_indices(edge_names)
+    repeated_nodes = find_repeated_node_indices(edges)
 
     # uncountable params must be a dict.
     if not uncountable_params:
@@ -497,7 +489,7 @@ def count_paths(metapath, metapaths, matrices, verbose=False,
         if len(repeat_indices[0]) > 2:
             if verbose:
                 print('4 Visits, Estimating')
-                return uncountable_estimate_func(metapath, metapaths, matrices, **uncountable_params)
+                return uncountable_estimate_func(path, edges, matrices, **uncountable_params)
 
         return count_removing_repeats(repeat_indices, to_multiply)
 
@@ -519,7 +511,7 @@ def count_paths(metapath, metapaths, matrices, verbose=False,
         else:
             if verbose:
                 print('Estimating')
-            result = uncountable_estimate_func(metapath, metapaths, matrices, **uncountable_params)
+            result = uncountable_estimate_func(path, edges, matrices, **uncountable_params)
             return result
 
     elif len(repeated_nodes) > 2:
