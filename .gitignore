@@ -1,5 +1,6 @@
 # Project specific files #
 *.bz2
+nohup.out
 
 # Compiled source #
 ###################
@@ -10,6 +11,10 @@
 *.o
 *.so
 *.pyc
+
+# Notebook files #
+##################
+.ipynb_checkpoints
 
 # Packages #
 ############
