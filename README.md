@@ -4,10 +4,10 @@ Software to quickly extract features from heterogeneous networks for machine lea
 
 ## Requirments
 
-scipy 0.19.0 or greater
-pandas
-numpy
-[hetio]('https://github.com/dhimmel/hetio')
+scipy 0.19.0 or greater  
+pandas  
+numpy  
+[hetio]('https://github.com/dhimmel/hetio')  
 
 ## Caution!
 
