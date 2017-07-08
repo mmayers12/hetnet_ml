@@ -249,17 +249,19 @@ class MatrixFormattedGraph(object):
 
         raise ValueError()
 
-    def calculate_dwpc(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=False, n_jobs=1):
+    def extract_dwpc(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=False, n_jobs=1):
         """
-        Extracts DWPC metrics for the given metapaths.  If no metapaths are given, will default to those listed in 'metapaths.json'
+        Extracts DWPC metrics for the given metapaths.  If no metapaths are given, will calcualte for all metapaths.
 
-        :param metapaths: list or None, the metapaths paths to calculate DWPC values for.  List must be a subset of those
-            found in metapahts.json.  If None, will calcualte DWPC values for all metapaths in the metapaths.json file.
-        :param start_nodes: String or list, String title of the metanode of the nodes for the start of the metapaths.  If a list,
-            can be IDs or indicies corresponding to a subset of starting nodes for the DWPC.
-        :param end_nodes: String or list, String title of the metanode of the nodes for the end of the metapaths.  If a list,
-            can be IDs or indicies corresponding to a subset of ending nodes for the DWPC.
-        :param verbose: boolean, if True, prints debugging text for calculating each DWPC. (not optimized for parallel processing).
+        :param metapaths: list or None, the metapaths paths to calculate DWPC values for.  List must be a subset of
+            those found in metapahts.json.  If None, will calcualte DWPC values for all metapaths in the metapaths.json
+            file.
+        :param start_nodes: String or list, String title of the metanode of the nodes for the start of the metapaths.
+            If a list, can be IDs or indicies corresponding to a subset of starting nodes for the DWPC.
+        :param end_nodes: String or list, String title of the metanode of the nodes for the end of the metapaths.  If a
+            list, can be IDs or indicies corresponding to a subset of ending nodes for the DWPC.
+        :param verbose: boolean, if True, prints debugging text for calculating each DWPC. (not optimized for parallel
+            processing).
         :param n_jobs: int, the number of jobs to use for parallel processing.
 
         :return: pandas.DataFrame. Table of results with columns corresponding to DWPC values from start_id to end_id
@@ -312,42 +314,72 @@ class MatrixFormattedGraph(object):
 
         return results
 
-    def calculate_degrees(self, start_nodes=None, end_nodes=None):
+    def extract_degrees(self, start_nodes=None, end_nodes=None):
         """
+        Extracts degree features from the metagraph
 
-        :param metapaths:
-        :param start_nodes:
-        :param end_nodes:
+        :param start_nodes: string or list, title of the metanode (string) from which paths originate, or a list of
+            either IDs or indicies corresponding to a subset of starting nodes.
+        :param end_nodes: string or list, title of the metanode (string) at which paths terminate, or a list of
+            either IDs or indicies corresponding to a subset of ending nodes.
         :return:
         """
         # Validate that we either have a list of nodeids, a list of indices, or a string of metanode
-        start_nodes = self.validate_ids(start_nodes)
-        end_nodes = self.validate_ids(end_nodes)
+        start_idxs = self.validate_ids(start_nodes)
+        end_idxs = self.validate_ids(end_nodes)
 
-        start_type = self.idx_to_metanode[start_nodes[0]]
-        end_type = self.idx_to_metanode[end_nodes[0]]
+        # Get metanode types for start and end
+        start_type = self.idx_to_metanode[start_idxs[0]]
+        end_type = self.idx_to_metanode[end_idxs[0]]
 
-        result = pd.DataFrame()
-
-        for edge in tqdm(self.metaedges):
-            degrees = self.adj_matrices[edge] * self.adj_matrices[edge]
-            if degrees[start_nodes, :][:, start_nodes].sum() > 0:
-                degree_for = start_nodes
-            elif degrees[start_nodes, :][:, start_nodes].sum() > 0:
-                degree_for = end_nodes
-            else:
-                continue
-
-            node_type = self.idx_to_metanode[degree_for[0]]
-            if node_type[0] == edge[0]:
-                result[edge] = mt.to_series(degrees, node_type, node_type, self.index_to_nid)
-            else:
-                edge_name = mt.get_reverse_undirected_edge(edge)
-                result[edge_name] = mt.to_series(degrees, node_type, node_type, self.index_to_nid)
-
+        # Get the ids and names for the start and end to initialize DataFrame
+        start_ids = [self.index_to_nid[x] for x in start_idxs]
+        end_ids = [self.index_to_nid[x] for x in end_idxs]
         start_name = start_type.lower() + '_id'
         end_name = end_type.lower() + '_id'
 
-        result = result.reset_index(drop=False)
-        result = result.rename(columns={'level_0': start_name, 'level_1': end_name})
-        return result
+        # Initialize multi-index dataframe for results
+        index = pd.MultiIndex.from_product([start_ids, end_ids], names=[start_name, end_name])
+        result = pd.DataFrame(index=index)
+
+        def get_edge_abbrev(kind, edge):
+            if kind == edge.get_id()[0]:
+                return edge.get_abbrev()
+            elif kind == edge.get_id()[1]:
+                return edge.inverse.get_abbrev()
+            else:
+                return None
+
+        # Make the metagraph if not already initialized
+        if not self.metagraph:
+            self.get_metagraph()
+
+        # Loop through each edge in the metagraph
+        edges = list(self.metagraph.get_edges())
+        for edge in tqdm(edges):
+
+                # Get those edges that link to start and end metanodes
+                start_abbrev = get_edge_abbrev(start_type, edge)
+                end_abbrev = get_edge_abbrev(end_type, edge)
+                abbrev = edge.get_abbrev()
+
+                # Calculate the degrees
+                degrees = (self.adj_matrices[abbrev] * self.adj_matrices[abbrev]).diagonal()
+
+                # Add degree results to DataFrame
+                if start_abbrev:
+                    start_series = pd.Series(degrees[start_idxs], index=start_ids, dtype='int64')
+                    result = result.reset_index()
+                    result = result.set_index(start_name)
+                    result[start_abbrev] = start_series
+
+                if end_abbrev:
+                    end_series = pd.Series(degrees[end_idxs], index=end_ids, dtype='int64')
+                    result = result.reset_index()
+                    result = result.set_index(end_name)
+                    result[end_abbrev] = end_series
+
+        # Sort Columns by Alpha
+        result = result.reset_index()
+        cols = sorted([c for c in result.columns if c not in [start_name, end_name]])
+        return result[[start_name, end_name]+cols]
