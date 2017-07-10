@@ -6,6 +6,7 @@ import pandas as pd
 from tqdm import tqdm
 from scipy.sparse import diags
 from hetio.hetnet import MetaGraph
+from parallel import parallel_process
 import matrix_tools as mt
 
 
@@ -267,7 +268,6 @@ class MatrixFormattedGraph(object):
         :return: pandas.DataFrame. Table of results with columns corresponding to DWPC values from start_id to end_id
             for each metapath.
         """
-        from parallel import parallel_process
 
         # If not given a list of metapaths, calculate for all
         if not metapaths:
@@ -290,6 +290,69 @@ class MatrixFormattedGraph(object):
                               'verbose': verbose, 'matrices': self.degree_weighted_matrices})
         # Run DPWC calculation processes in parallel
         result = parallel_process(array=arguments, function=mt.count_paths, use_kwargs=True, n_jobs=n_jobs, front_num=0)
+
+        # Format the matrices into a DataFrame
+        print('\nReformating results...')
+        time.sleep(0.5)
+
+        # Prep the Series conversion for parallel processing
+        arguments = []
+        for mp, dwpc in zip(metapaths, result):
+            arguments.append({'result': dwpc, 'start_nodes': start_idxs, 'end_nodes': end_idxs,
+                              'name': mp, 'index_to_id': self.index_to_nid})
+
+        # Process and convert results to a DataFrame
+        result = parallel_process(array=arguments, function=mt.to_series, use_kwargs=True, n_jobs=n_jobs, front_num=0)
+        results = pd.DataFrame(result).T
+
+        # Fix column names to correspond to proper metanode_ids
+        start_name = start_type.lower() + '_id'
+        end_name = end_type.lower() + '_id'
+
+        results = results.reset_index(drop=False)
+        results = results.rename(columns={'level_0': start_name, 'level_1': end_name})
+
+        return results
+
+    def extract_dwwc(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=False, n_jobs=1):
+        """
+        Extracts DWWC metrics for the given metapaths.  If no metapaths are given, will calcualte for all metapaths.
+
+        :param metapaths: list or None, the metapaths paths to calculate DWPC values for.  List must be a subset of
+            those found in metapahts.json.  If None, will calcualte DWPC values for all metapaths in the metapaths.json
+            file.
+        :param start_nodes: String or list, String title of the metanode of the nodes for the start of the metapaths.
+            If a list, can be IDs or indicies corresponding to a subset of starting nodes for the DWPC.
+        :param end_nodes: String or list, String title of the metanode of the nodes for the end of the metapaths.  If a
+            list, can be IDs or indicies corresponding to a subset of ending nodes for the DWPC.
+        :param verbose: boolean, if True, prints debugging text for calculating each DWPC. (not optimized for parallel
+            processing).
+        :param n_jobs: int, the number of jobs to use for parallel processing.
+
+        :return: pandas.DataFrame. Table of results with columns corresponding to DWPC values from start_id to end_id
+            for each metapath.
+        """
+
+        # If not given a list of metapaths, calculate for all
+        if not metapaths:
+            metapaths = list(self.metapaths.keys())
+
+        # Validate that we either have a list of nodeids, a list of indices, or a string of metanode
+        start_idxs = self.validate_ids(start_nodes)
+        end_idxs = self.validate_ids(end_nodes)
+
+        start_type = self.idx_to_metanode[start_idxs[0]]
+        end_type = self.idx_to_metanode[end_idxs[0]]
+
+        print('Calculating DWPCs...')
+        time.sleep(0.5)
+
+        # Prepare functions for parallel processing
+        arguments = []
+        for mp in metapaths:
+            arguments.append({'path': mt.get_path(mp, self.metapaths), 'matrices': self.degree_weighted_matrices})
+        # Run DWWC calculation processes in parallel
+        result = parallel_process(array=arguments, function=mt.count_walks, use_kwargs=True, n_jobs=n_jobs, front_num=0)
 
         # Format the matrices into a DataFrame
         print('\nReformating results...')
