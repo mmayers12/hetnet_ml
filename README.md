@@ -2,16 +2,21 @@
 
 Software to quickly extract features from heterogeneous networks for machine learning.
 
+hetnet-ml has been inspired by project [Rephetio](https://think-lab.github.io/p/rephetio/), 
+this tool attempts to qucikly and efficiently extract metapath based features including
+the degree-weighted path counts as described by 
+[Himmelstein et al.](http://journals.plos.org/ploscompbiol/article?id=10.1371/journal.pcbi.1004259).
+
 ## Requirments
 
 scipy 0.19.0 or greater  
-pandas  
-numpy  
+pandas  0.20.2 or greater  
+numpy 1.13.0 or greater  
 [hetio]('https://github.com/dhimmel/hetio')  
 
 ## Caution!
 
-This repo is currently under development and many feautres and methods are unstable and
+This repo is currently under development and many features and methods are unstable and
 subject to change
 
 ## Usage
