@@ -36,7 +36,7 @@ def get_path(metapath, metapaths):
 
 def get_edge_names(metapath, metapaths):
     """Gets the list of edge names from a metapath abbreviation
-    :param metapaths: 
+    :param metapaths:
     """
     return metapaths[metapath]['edges']
 
@@ -79,8 +79,8 @@ def get_reverse_directed_edge(orig):
 def get_reverse_undirected_edge(orig):
     """
     Gets the reverse edge for a standard edge.
-    :param orig: 
-    :return: 
+    :param orig:
+    :return:
     """
 
     nodes = ['', '']
@@ -146,7 +146,7 @@ def count_walks(path, matrices):
     """
     Calculates either WC or DWWC depending on wither an adj. or weighted matrix is passed. Walks essentially
     allow repeated visits to the same node, whereas paths do not.
-    
+
     :param path: list, the abbreviations for each metaedge of the metapath to be followed.
     :param matrices: The dictionary of sparse matrices to be used to calculate.  If a simple adjacency matrix,
         will give Walk Count, but if a matrices are weighted by degree will give Degree Weighted Walk Count
@@ -179,9 +179,9 @@ def find_repeated_node_indices(edge_names):
     """
 
     # Just get the node types visited from the edge names
-    visited_nodes = [edge_names[0].split(' - ')[0]]
+    visited_nodes = [edge_names[0].split(' ')[0]]
     for e in edge_names:
-        visited_nodes.append(e.split(' - ')[-1])
+        visited_nodes.append(e.split(' ')[-1])
 
     # Convert to index for each node type
     node_order = defaultdict(list)
@@ -236,7 +236,7 @@ def count_between_identical_metanodes(path):
     :param path: List of sparse matrices representing the edges. Each one must start and end on the same
         metanode
 
-    :return: Sparse matrix, the path counts down the metapath, with repeats removed    
+    :return: Sparse matrix, the path counts down the metapath, with repeats removed
     """
     result = multiply_removing_diagonal(path[0])
     if len(path) == 1:
@@ -250,12 +250,12 @@ def count_between_identical_metanodes(path):
 def count_removing_repeats(repeat_indices, matrices):
     """
     Counts paths removing walks with repeated nodes. Repeat indices identify where in the metapath metanodes are
-    being revisited.  
+    being revisited.
 
     Matrices are multiplied in order of repeat indices, so the following can be achieved:
     (a*(b*c)*d)*e can be achieved by passing [[1,2],[0,3]], [a,b,c,d,e] as the fucntions arguments.
     Aftery multiplying b*c, repeated nodes are removed by setting the resultant matrix diagonal to 0.
-    Then, that product will be multiplied by a and d, (a*prod*d), and again the result will have its 
+    Then, that product will be multiplied by a and d, (a*prod*d), and again the result will have its
     diagonal set to 0. Finally that result will be multiplied by e.
 
     :param repeat_indices: List of lists, pairs of indices showing the start and stop subpaths leading
@@ -462,7 +462,7 @@ def count_paths(path, edges, matrices, verbose=False, uncountable_estimate_func=
     :param uncountable_estimate_func: Function to determine the path count when matrix multiplication cannot return
         an exact answer. Must be a function `metapath` and `matricies`. Any other parameters can be passed by
         the `uncountable_params` argument.
-    :param uncountable_params: Dictionary, the keyword arguments for any other parameters to be passed to the 
+    :param uncountable_params: Dictionary, the keyword arguments for any other parameters to be passed to the
         uncountable_estimate_func.
 
     :return: Sparse Matrix, containing path counts along the metapath.
