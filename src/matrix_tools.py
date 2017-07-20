@@ -4,17 +4,20 @@ import pandas as pd
 
 from tqdm import tqdm
 from scipy.special import logit
-from itertools import combinations
 from scipy.sparse import diags, eye
 from collections import defaultdict
+from itertools import combinations, chain
 
 
 def get_path(metapath, metapaths):
     """
     Finds the correct abbreviations and order for the metaedges in a metapath.
 
-    :param metapath: String, the abbrevation for the metapath e.g. 'CbGaD'
-    :return: list, contains the abbereviations for each metaedge in the metapath.
+    :param metapath: String, the abbreviation for the metapath e.g. 'CbGaD'
+    :param metapaths: dict, with keys metapaths, and values dicts containing metapath information including
+        edge_abbreviations and standard_edge_abbreviations.
+        
+    :return: list, contains the abbreviations for each metaedge in the metapath.
         e.g. ['CbG', 'GaD']
     """
     # If no directed edges, just return standard abbreviations
@@ -74,25 +77,6 @@ def get_reverse_directed_edge(orig):
     # This is some ugly code... It grabs the start node abbreviation by indices
     # Adds a '<' then the edge abbreviation, then the end node abbreviation
     return orig[start_node[0]: start_node[-1]+1] + '<' + orig[edge[0]: edge[-1]+1] + orig_spl[1]
-
-
-def get_reverse_undirected_edge(orig):
-    """
-    Gets the reverse edge for a standard edge.
-    :param orig:
-    :return:
-    """
-
-    nodes = ['', '']
-    edge = ''
-    idx = 0
-    for l0, l1 in zip(test, u):
-        if l0 == l1:
-            nodes[idx] += l0
-        else:
-            edge += l0
-            idx = 1
-    return nodes[1] + edge + nodes[0]
 
 
 def weight_by_degree(matrix, w=0.4, directed=False):
@@ -314,7 +298,8 @@ def count_paths_removing_repeated_type(path, edges, matrices, repeat_type, defau
     in list order, identified as being repeated. A flag to default to the metanode type with the most repeats
     can be used if no given types are found.
 
-    :param path: String representation of metapath to count paths for
+    :param path: list, the standard edge abbreviations that make up the metapath
+    :param edges: list, the edge names that make up the metapath
     :param matrices: Dictionary of the matrices to use for calculation
         (e.g. degree weighted or standard adjacency)
     :param repeat_type: String or list, the metanode type to remove repeats from.
@@ -409,7 +394,8 @@ def estimate_count_from_repeats(path, edges, matrices, resolving_function=interp
     resolving_function to estimate the overcounting via walks.  If this value ends up being greater
     than the total walk-count, the Path-Count is set to zero.
 
-    :param path: String representation of metapath to count paths for
+    :param path: list, the standard edge abbreviations that make up the metapath
+    :param edges: list, the edge names that make up the metapath
     :param matrices: Dictionary of the matrices to use for calculation
         (e.g. degree weighted or standard adjacency)
     :param resolving_function: function to determine the error.  Default: sum()
@@ -441,6 +427,118 @@ def estimate_count_from_repeats(path, edges, matrices, resolving_function=interp
     result = walks - resolving_function(extra_counts)
     result[result < 0] = 0
 
+    return result
+
+
+def calc_abab(mats, return_steps=False):
+    """
+    Counts paths with an ABAB structure. Takes a list of 3 matrices, removes overcounts due to visiting A twice,
+    removes overcounts due to visiting B twice, then adds back in paths that were doubly removed where an A and B 
+    node were both visited twice.
+    
+    :param mats: list, the matrcies to be multiplied together
+    :param return_steps: Boolean, if True, will also return the intermediate steps, for further calculations
+    :return: Matrix, the path counts.
+    """
+    assert len(mats) == 3
+
+    step1 = mats[0] * mats[1]
+    step2 = mats[1] * mats[2]
+
+    diag1 = diags(step1.diagonal())
+    diag2 = diags(step2.diagonal())
+
+    overcount1 = diag1 * mats[2]
+    overcount2 = mats[0] * diag2
+
+    doubly_removed = mats[0].multiply(mats[1].multiply(mats[2]))
+
+    result = np.prod(mats) - overcount1 - overcount2 + doubly_removed
+
+    if return_steps:
+        return result, step1, step2
+
+    return result
+
+
+def get_abab_list(to_multiply, all_repeats):
+    """
+    Gets a list of matrices that conform to ABAB pattern. Collapses down larger patterns like ABCAB to ABAB.
+    
+    :param to_multiply: list, the matrices to be multiplied to determine the path count. 
+    :param all_repeats: list, the locations of the repeats. 
+    
+    :return: list of len 3 that makes the ABAB pattern. 
+    """
+    abab_list = []
+
+    start = all_repeats[0][0]
+    end = all_repeats[1][0]
+
+    abab_list.append(np.prod(to_multiply[start:end]))
+
+    start = all_repeats[1][0]
+    end = all_repeats[0][1]
+
+    abab_list.append(np.prod(to_multiply[start:end]))
+
+    start = all_repeats[0][1]
+    end = all_repeats[1][1]
+
+    abab_list.append(np.prod(to_multiply[start:end]))
+    return abab_list
+
+
+def determine_abab_kind(repeat_indices, to_multiply):
+    """
+    Determines the ABAB structure in the metapath and selects the appropriate path counting method. 
+
+    :param repeat_indices: list, the locations where nodes are repeated in the path structure.
+    :param to_multiply: list, the matrices to be multiplied together to get the path count.
+    
+    :return: Matrix, the path counts
+    """
+    all_repeats = sorted(list(c for c in chain(*repeat_indices)))
+    if len(all_repeats) == 2:
+
+        abab_list = get_abab_list(to_multiply, all_repeats)
+        abab_result = calc_abab(abab_list)
+
+        if min(list(chain(*all_repeats))) != 0:
+            return to_multiply[0] * abab_result
+        elif max(list(chain(*all_repeats))) != len(to_multiply):
+            return abab_result * to_multiply[-1]
+        else:
+            return abab_result
+
+    elif len(all_repeats) == 3:
+        return abab_3(repeat_indices, to_multiply)
+
+
+def abab_3(repeat_indices, to_multiply):
+    """
+    Determines the path counts for a path with ABAB structure and either node A or B is repeated a 3rd time.
+    
+    :param repeat_indices: list, the locations where nodes are repeated in the path structure.
+    :param to_multiply: list, the matrices to be multiplied together to get the path count.
+    
+    :return: Matrix, the path counts
+    """
+    ordered_repeats = sorted(repeat_indices, key=lambda x: len(x))
+    shorter = ordered_repeats[0][0]
+    longer = ordered_repeats[1]
+    if min(shorter) > max(longer[0]):
+        # Comes before ABAB (e.g. AABAB)
+        result, step1, step2 = calc_abab(to_multiply[1:], True)
+        overcount3 = diags((to_multiply[0] * step1).diagonal()) * to_multiply[-1]
+        result = (to_multiply[0] * result) - overcount3
+    elif max(shorter) < min(longer[1]):
+        # comes after ABAB (e.g ABABB)
+        result, step1, step2 = calc_abab(to_multiply[:-1], True)
+        overcount3 = to_multiply[0] * diags((step2 * to_multiply[-1]).diagonal())
+        result = (result * to_multiply[-1]) - overcount3
+    else:
+        return None
     return result
 
 
@@ -510,9 +608,17 @@ def count_paths(path, edges, matrices, verbose=False, uncountable_estimate_func=
 
         else:
             if verbose:
-                print('Estimating')
-            result = uncountable_estimate_func(path, edges, matrices, **uncountable_params)
-            return result
+                print('trying new ABAB logic')
+
+            result = determine_abab_kind(repeats, to_multiply)
+            if result is not None:
+                return result
+            else:
+
+                if verbose:
+                    print('Estimating')
+                result = uncountable_estimate_func(path, edges, matrices, **uncountable_params)
+                return result
 
     elif len(repeated_nodes) > 2:
         print('Not yet implemented', path)
