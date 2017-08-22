@@ -21,8 +21,8 @@ class MatrixFormattedGraph(object):
         Initializes the adjacency matrices used for feature extraction.
 
         :param node_file: string, location of the .csv file containing nodes formatted for neo4j import.
-            This format must include two required columns: One column labeled ':ID' with the unique id for each node,
-            and one column named ':LABEL' containing the metanode type for each node
+            This format must include two required columns: One column labeled ':ID' with the unique id for each 
+            node, and one column named ':LABEL' containing the metanode type for each node
         :param edge_file: string, location of the .csv file containing edges formatted for neo4j import.
             This format must include three required columns: One column labeled  ':START_ID' with the node id
             for the start of the edge, one labeled ':END_ID' with teh node id for the end of the edge and one
@@ -30,7 +30,7 @@ class MatrixFormattedGraph(object):
         :param start_kind: string, the source metanode. The node type from which the target edge to be predicted 
             as well as all metapaths originate.
         :param end_kind: string, the target metanode. The node type to which the target edge to be predicted 
-            as well as all metapaths terminate. 
+            as well as all metapaths terminate.
         :param max_length: int, the maximum length of metapaths to be extracted by this feature extractor.
         :param metapaths_file: string, location of the metapaths.json file that contains information on all the
             metapaths to be extracted.  If provided, this will be used to generate metapath information and
@@ -81,16 +81,18 @@ class MatrixFormattedGraph(object):
     def read_edge_file(self):
         """Reads the edge file and stores it as a DataFrame"""
         self.edge_df = pd.read_csv(self.edge_file, dtype={':START_ID': str, ':END_ID': str})
+        self.edge_df = self.edge_df.dropna()
 
         # Split the metaedge name from its abbreviation if both are included
-        if sum(self.edge_df[':TYPE'].str.contains('_')) != 0:
-            long_abbrev = self.edge_df[':TYPE'].str.split('_', expand=True)
-            self.metaedge_names = long_abbrev.iloc[:, 0].unique()
-            self.metaedges = long_abbrev.iloc[:, 1].unique()
-            self.edge_df['abbrev'] = long_abbrev.iloc[:, 1]
+        if all(self.edge_df[':TYPE'].str.contains('_')):
+            e_types = self.edge_df[':TYPE'].unique()
+            e_types_split = [e.split('_') for e in e_types]
+            self.metaedges = [e[-1] for e in e_types_split]
+
+            edge_abbrev_dict = {e: abv for e, abv in zip(e_types, self.metaedges)}
+            self.edge_df['abbrev'] = self.edge_df[':TYPE'].apply(lambda t: edge_abbrev_dict[t])
 
         else:
-            self.metaedge_names = None
             self.metaedges = self.edge_df[':TYPE'].unique()
             self.edge_df['abbrev'] = self.edge_df[':TYPE']
 
@@ -139,23 +141,69 @@ class MatrixFormattedGraph(object):
             return tuples
 
         def get_abbrev_dict():
-            """Returns an abbreviation dictionary generated from class variables."""
+            """
+            Returns an abbreviation dictionary generated from class variables.
+
+            Edge types are formatted as such:
+                edge-name_{START_NODE_ABBREV}{edge_abbrev}{END_NODE_ABBREV}
+                e.g. Compound-binds-Gene is: binds_CbG
+
+            Therefore, abbreviations for edge and node types can be extracted from the full edge name.
+            """
             node_kinds = self.node_df[':LABEL'].unique()
-            edge_kinds = self.metaedge_names
+            edge_kinds = self.edge_df[':TYPE'].unique()
 
-            node_abbrevs = [''.join([w[0].upper() for w in re.split('[ -]', t)]) for t in node_kinds]
-            edge_abbrevs = [''.join([w[0].lower() for w in t.split('-')]) for t in edge_kinds]
+            # Extract just the abbreviation portion
+            edge_abbrevs = [e.split('_')[-1] for e in edge_kinds]
 
-            node_abbrev_dict = {t: a for t, a in zip(node_kinds, node_abbrevs)}
-            edge_abbrev_dict = {t: a for t, a in zip(edge_kinds, edge_abbrevs)}
+            # Initialize the abbreviation dict (key = fullname, value = abbreviation)
+            node_abbrev_dict = dict()
+            edge_abbrev_dict = dict()
 
-            # Fix an edge case wrt Rephetio
-            if 'Pathway' in node_abbrev_dict:
-                node_abbrev_dict['Pathway'] = 'PW'
+            for i, kind in enumerate(tqdm(edge_kinds)):
+                # the true edge name is everything before the final '_' character
+                # so if we have PROCESS_OF_PpoP, we still want to keep 'PROCESS_OF' with the underscores intact.
+                edge_name = '_'.join(kind.split('_')[:-1])
+
+                # initialize the abbreviations
+                edge_abbrev = ''
+                start_abbrev = ''
+                end_abbrev = ''
+
+                start = True
+                for char in edge_abbrevs[i]:
+                    # Direction is not in abbreviations, skip to next character
+                    if char == '>' or char == '<':
+                        continue
+
+                    # When the abbreviation is in uppercase, abbreviating for node type
+                    if char == char.upper():
+                        if start:
+                            start_abbrev += char
+                        else:
+                            end_abbrev += char
+
+                    # When abbreviation is lowercase, you have the abbreviation for the edge
+                    if char == char.lower():
+                        # now no longer on the start nodetype, so set to false
+                        start = False
+                        edge_abbrev += char
+
+                # Have proper edge abbreviation
+                edge_abbrev_dict[edge_name] = edge_abbrev
+
+                # Have abbreviations, but need to get corresponding types for start and end nodes
+                edge = self.edge_df[self.edge_df[':TYPE'] == kind].iloc[0]
+                start_kind = self.idx_to_metanode[self.nid_to_index[edge[':START_ID']]]
+                end_kind = self.idx_to_metanode[self.nid_to_index[edge[':END_ID']]]
+
+                node_abbrev_dict[start_kind] = start_abbrev
+                node_abbrev_dict[end_kind] = end_abbrev
 
             return {**node_abbrev_dict, **edge_abbrev_dict}
 
         print('Initializing metagraph...')
+        time.sleep(0.5)
         edge_tuples = get_tuples(self.edge_df[':START_ID'], self.edge_df[':END_ID'], self.edge_df[':TYPE'])
         abbrev_dict = get_abbrev_dict()
 
@@ -263,12 +311,12 @@ class MatrixFormattedGraph(object):
             The metanode types for the nodes
             The node id's for the nodes
             A column name for the node type (type.lower() + '_id')
-        
-        :param start_nodes: string or list, String title of the metanode of the nodes for the start of the metapaths.
+
+        :param start_nodes: string or list, title of the metanode of the nodes for the start of the metapaths.
             If a list, can be IDs or indicies corresponding to a subset of starting nodes for the feature.
-        :param end_nodes: String or list, String title of the metanode of the nodes for the end of the metapaths.  If a
-            list, can be IDs or indicies corresponding to a subset of ending nodes for the feature.
-        
+        :param end_nodes: String or list, String title of the metanode of the nodes for the end of the metapaths.
+            If a list, can be IDs or indicies corresponding to a subset of ending nodes for the feature.
+
         :returns: start_idxs, end_idxs, start_type, end_type, start_ids, end_ids, start_name, end_name
             lists and strings with information on the starting and ending nodes.
         """
@@ -292,17 +340,17 @@ class MatrixFormattedGraph(object):
     def process_extraction_results(self, result, metapaths, start_nodes, end_nodes):
         """
         Given a list of matricies and a list of metapaths, processes the feature extraction into a pandas DataFrame.
-    
-        
-        :param result: list of matricies, the feature extraction result. 
+
+
+        :param result: list of matricies, the feature extraction result.
         :param metapaths: list of strings, the names of the metapaths extracted
-        :param start_nodes: string or list, String title of the metanode of the nodes for the start of the metapaths.
+        :param start_nodes: string or list, title of the metanode of the nodes for the start of the metapaths.
             If a list, can be IDs or indicies corresponding to a subset of starting nodes for the feature.
         :param end_nodes: string or list, String title of the metanode of the nodes for the start of the metapaths.
             If a list, can be IDs or indicies corresponding to a subset of starting nodes for the feature.
-        
-        :return: pandas.DataFrame, with columns for start_node_id, end_node_id, and columns for each of the metapath 
-            features calculated. 
+
+        :return: pandas.DataFrame, with columns for start_node_id, end_node_id and columns for each of the metapath 
+            features calculated.
         """
         # Get information on nodes needed for DataFrame formatting.
         start_idxs, end_idxs, start_type, end_type, start_ids, end_ids, start_name, end_name = \
@@ -329,18 +377,18 @@ class MatrixFormattedGraph(object):
         Extracts DWPC metrics for the given metapaths.  If no metapaths are given, will calcualte for all metapaths.
 
         :param metapaths: list or None, the metapaths paths to calculate DWPC values for.  List must be a subset of
-            those found in metapahts.json.  If None, will calcualte DWPC values for all metapaths in the metapaths.json
+            those found in metapahts.json.  If None, will calcualte DWPC values for metapaths in the metapaths.json
             file.
-        :param start_nodes: String or list, String title of the metanode of the nodes for the start of the metapaths.
+        :param start_nodes: String or list, String title of the metanode start of the metapaths.
             If a list, can be IDs or indicies corresponding to a subset of starting nodes for the DWPC.
-        :param end_nodes: String or list, String title of the metanode of the nodes for the end of the metapaths.  If a
+        :param end_nodes: String or list, String title of the metanode for the end of the metapaths.  If a
             list, can be IDs or indicies corresponding to a subset of ending nodes for the DWPC.
-        :param verbose: boolean, if True, prints debugging text for calculating each DWPC. (not optimized for parallel
-            processing).
+        :param verbose: boolean, if True, prints debugging text for calculating each DWPC. (not optimized for 
+            parallel processing).
         :param n_jobs: int, the number of jobs to use for parallel processing.
 
-        :return: pandas.DataFrame. Table of results with columns corresponding to DWPC values from start_id to end_id
-            for each metapath.
+        :return: pandas.DataFrame, Table of results with columns corresponding to DWPC values from start_id to 
+            end_id for each metapath.
         """
 
         # If not given a list of metapaths, calculate for all
@@ -357,11 +405,13 @@ class MatrixFormattedGraph(object):
         # Prepare functions for parallel processing
         arguments = []
         for mp in metapaths:
-            arguments.append({'path': mt.get_path(mp, self.metapaths), 'edges': mt.get_edge_names(mp, self.metapaths),
+            arguments.append({'path': mt.get_path(mp, self.metapaths),
+                              'edges': mt.get_edge_names(mp, self.metapaths),
                               'verbose': verbose, 'matrices': self.degree_weighted_matrices})
 
         # Run DPWC calculation processes in parallel
-        result = parallel_process(array=arguments, function=mt.count_paths, use_kwargs=True, n_jobs=n_jobs, front_num=0)
+        result = parallel_process(array=arguments, function=mt.count_paths, use_kwargs=True, 
+                                  n_jobs=n_jobs, front_num=0)
 
         # Process and return results
         results = self.process_extraction_results(result, metapaths, start_nodes, end_nodes)
@@ -372,16 +422,16 @@ class MatrixFormattedGraph(object):
         Extracts DWWC metrics for the given metapaths.  If no metapaths are given, will calcualte for all metapaths.
 
         :param metapaths: list or None, the metapaths paths to calculate DWPC values for.  List must be a subset of
-            those found in metapahts.json.  If None, will calcualte DWPC values for all metapaths in the metapaths.json
-            file.
-        :param start_nodes: String or list, String title of the metanode of the nodes for the start of the metapaths.
+            those found in metapahts.json.  If None, will calcualte DWPC values for all metapaths in the 
+            metapaths.json file.
+        :param start_nodes: String or list, String title of the metanode for the start of the metapaths.
             If a list, can be IDs or indicies corresponding to a subset of starting nodes for the DWWC.
-        :param end_nodes: String or list, String title of the metanode of the nodes for the end of the metapaths.  If a
+        :param end_nodes: String or list, String title of the metanode for the end of the metapaths.  If a
             list, can be IDs or indicies corresponding to a subset of ending nodes for the DWWC.
         :param n_jobs: int, the number of jobs to use for parallel processing.
 
-        :return: pandas.DataFrame. Table of results with columns corresponding to DWPC values from start_id to end_id
-            for each metapath.
+        :return: pandas.DataFrame. Table of results with columns corresponding to DWPC values from start_id to 
+            end_id for each metapath.
         """
 
         # If not given a list of metapaths, calculate for all
@@ -400,7 +450,8 @@ class MatrixFormattedGraph(object):
         for mp in metapaths:
             arguments.append({'path': mt.get_path(mp, self.metapaths), 'matrices': self.degree_weighted_matrices})
         # Run DWWC calculation processes in parallel
-        result = parallel_process(array=arguments, function=mt.count_walks, use_kwargs=True, n_jobs=n_jobs, front_num=0)
+        result = parallel_process(array=arguments, function=mt.count_walks, use_kwargs=True, 
+                                  n_jobs=n_jobs, front_num=0)
 
         # process and resturn results
         results = self.process_extraction_results(result, metapaths, start_nodes, end_nodes)
