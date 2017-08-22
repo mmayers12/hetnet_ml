@@ -567,6 +567,7 @@ def count_paths(path, edges, matrices, verbose=False, uncountable_estimate_func=
     """
 
     to_multiply = [matrices[edge] for edge in path]
+    size = to_multiply[0].shape[0]
     repeated_nodes = find_repeated_node_indices(edges)
 
     # uncountable params must be a dict.
@@ -622,9 +623,13 @@ def count_paths(path, edges, matrices, verbose=False, uncountable_estimate_func=
 
     elif len(repeated_nodes) > 2:
         print('Not yet implemented', path)
+        print('Returning Zeroes')
+        return diags([0] * size)
 
     else:
-        print("Something went wrong.....", path)
+        print("Unknown error, Something went wrong.....", path)
+        print("Returning Zeroes")
+        return diags([0] * size)
 
 
 def to_series(result, start_nodes, end_nodes, index_to_id, name=None):
