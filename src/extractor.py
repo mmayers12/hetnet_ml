@@ -110,37 +110,7 @@ class MatrixFormattedGraph(object):
     def get_metagraph(self):
         """Generates class variable metagraph, an instance of hetio.hetnet.MetaGraph"""
 
-        def get_tuples(start_ids, end_ids, types):
-            """Generates metaedge tuples form node start_ids, end_ids and types"""
-            def get_direction(t):
-                """Finds the direction of a metaedge from its abbreviaton"""
-                if '>' in t:
-                    return 'forward'
-                elif '<' in t:
-                    return 'backward'
-                else:
-                    return 'both'
-
-            start_kinds = start_ids.apply(lambda s: self.idx_to_metanode[self.nid_to_index[s]])
-            end_kinds = end_ids.apply(lambda e: self.idx_to_metanode[self.nid_to_index[e]])
-
-            tuples_df = pd.DataFrame()
-            tuples_df['start_kind'] = start_kinds
-            tuples_df['end_kind'] = end_kinds
-            tuples_df['types'] = types
-
-            tuples_df = tuples_df.drop_duplicates()
-
-            tuples_df['edge'] = tuples_df['types'].str.split('_', expand=True)[0]
-            tuples_df['direction'] = tuples_df['types'].apply(get_direction)
-
-            tuple_columns = ['start_kind', 'end_kind', 'edge', 'direction']
-
-            tuples = [tuple(r) for r in tuples_df[tuple_columns].itertuples(index=False)]
-
-            return tuples
-
-        def get_abbrev_dict():
+        def get_abbrev_dict_and_edge_tuples():
             """
             Returns an abbreviation dictionary generated from class variables.
 
@@ -150,8 +120,20 @@ class MatrixFormattedGraph(object):
 
             Therefore, abbreviations for edge and node types can be extracted from the full edge name.
             """
+            def get_direction(t):
+                """Finds the direction of a metaedge from its abbreviaton"""
+                if '>' in t:
+                    return 'forward'
+                elif '<' in t:
+                    return 'backward'
+                else:
+                    return 'both'
+
             node_kinds = self.node_df[':LABEL'].unique()
             edge_kinds = self.edge_df[':TYPE'].unique()
+
+            # If we have a lot of edges, lets reduce to one of each type for faster queries later.
+            edge_kinds_df = self.edge_df.drop_duplicates(subset=[':TYPE'])
 
             # Extract just the abbreviation portion
             edge_abbrevs = [e.split('_')[-1] for e in edge_kinds]
@@ -159,6 +141,7 @@ class MatrixFormattedGraph(object):
             # Initialize the abbreviation dict (key = fullname, value = abbreviation)
             node_abbrev_dict = dict()
             edge_abbrev_dict = dict()
+            metaedge_tuples = []
 
             for i, kind in enumerate(tqdm(edge_kinds)):
                 # the true edge name is everything before the final '_' character
@@ -193,19 +176,22 @@ class MatrixFormattedGraph(object):
                 edge_abbrev_dict[edge_name] = edge_abbrev
 
                 # Have abbreviations, but need to get corresponding types for start and end nodes
-                edge = self.edge_df[self.edge_df[':TYPE'] == kind].iloc[0]
+                edge = edge_kinds_df[edge_kinds_df[':TYPE'] == kind].iloc[0]
                 start_kind = self.idx_to_metanode[self.nid_to_index[edge[':START_ID']]]
                 end_kind = self.idx_to_metanode[self.nid_to_index[edge[':END_ID']]]
 
                 node_abbrev_dict[start_kind] = start_abbrev
                 node_abbrev_dict[end_kind] = end_abbrev
 
-            return {**node_abbrev_dict, **edge_abbrev_dict}
+                direction = get_direction(kind)
+                edge_tuple = (start_kind, end_kind, edge_name, direction)
+                metaedge_tuples.append(edge_tuple)
+
+            return {**node_abbrev_dict, **edge_abbrev_dict}, metaedge_tuples
 
         print('Initializing metagraph...')
         time.sleep(0.5)
-        edge_tuples = get_tuples(self.edge_df[':START_ID'], self.edge_df[':END_ID'], self.edge_df[':TYPE'])
-        abbrev_dict = get_abbrev_dict()
+        abbrev_dict, edge_tuples = get_abbrev_dict_and_edge_tuples()
 
         self.metagraph = MetaGraph.from_edge_tuples(edge_tuples, abbrev_dict)
 
@@ -248,9 +234,9 @@ class MatrixFormattedGraph(object):
 
         # Add edges to the matrix
         for s, e in zip(start, end):
-            mat[s, e] += 1
+            mat[s, e] = 1
             if not directed:
-                mat[e, s] += 1
+                mat[e, s] = 1
 
         return mat.tocsc()
 

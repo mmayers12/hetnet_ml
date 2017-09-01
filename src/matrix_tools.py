@@ -16,7 +16,7 @@ def get_path(metapath, metapaths):
     :param metapath: String, the abbreviation for the metapath e.g. 'CbGaD'
     :param metapaths: dict, with keys metapaths, and values dicts containing metapath information including
         edge_abbreviations and standard_edge_abbreviations.
-        
+
     :return: list, contains the abbreviations for each metaedge in the metapath.
         e.g. ['CbG', 'GaD']
     """
@@ -435,7 +435,7 @@ def calc_abab(mats, return_steps=False):
     Counts paths with an ABAB structure. Takes a list of 3 matrices, removes overcounts due to visiting A twice,
     removes overcounts due to visiting B twice, then adds back in paths that were doubly removed where an A and B 
     node were both visited twice.
-    
+
     :param mats: list, the matrcies to be multiplied together
     :param return_steps: Boolean, if True, will also return the intermediate steps, for further calculations
     :return: Matrix, the path counts.
@@ -464,11 +464,11 @@ def calc_abab(mats, return_steps=False):
 def get_abab_list(to_multiply, all_repeats):
     """
     Gets a list of matrices that conform to ABAB pattern. Collapses down larger patterns like ABCAB to ABAB.
-    
+
     :param to_multiply: list, the matrices to be multiplied to determine the path count. 
-    :param all_repeats: list, the locations of the repeats. 
-    
-    :return: list of len 3 that makes the ABAB pattern. 
+    :param all_repeats: list, the locations of the repeats.
+
+    :return: list of len 3 that makes the ABAB pattern.
     """
     abab_list = []
 
@@ -495,7 +495,7 @@ def determine_abab_kind(repeat_indices, to_multiply):
 
     :param repeat_indices: list, the locations where nodes are repeated in the path structure.
     :param to_multiply: list, the matrices to be multiplied together to get the path count.
-    
+
     :return: Matrix, the path counts
     """
     all_repeats = sorted(list(c for c in chain(*repeat_indices)))
@@ -518,10 +518,10 @@ def determine_abab_kind(repeat_indices, to_multiply):
 def abab_3(repeat_indices, to_multiply):
     """
     Determines the path counts for a path with ABAB structure and either node A or B is repeated a 3rd time.
-    
+
     :param repeat_indices: list, the locations where nodes are repeated in the path structure.
     :param to_multiply: list, the matrices to be multiplied together to get the path count.
-    
+
     :return: Matrix, the path counts
     """
     ordered_repeats = sorted(repeat_indices, key=lambda x: len(x))
