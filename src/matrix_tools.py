@@ -74,9 +74,10 @@ def get_reverse_directed_edge(orig):
         if l0 != l2:
             edge.append(i)
 
-    # This is some ugly code... It grabs the start node abbreviation by indices
-    # Adds a '<' then the edge abbreviation, then the end node abbreviation
-    return orig[start_node[0]: start_node[-1]+1] + '<' + orig[edge[0]: edge[-1]+1] + orig_spl[1]
+    # This is some ugly code... It puts the end node in the start position,
+    # Adds a '<' then the edge abbreviation,
+    # then grabs the start node abbreviation by indices and puts it in the end position.
+    return orig_spl[1] + '<' + orig[edge[0]: edge[-1]+1] + orig[start_node[0]: start_node[-1]+1]  
 
 
 def weight_by_degree(matrix, w=0.4, directed=False):
@@ -126,7 +127,7 @@ def weight_by_degree(matrix, w=0.4, directed=False):
     return matrix_out.tocsc()
 
 
-def count_walks(path, matrices):
+def count_walks(path, to_multiply):
     """
     Calculates either WC or DWWC depending on wither an adj. or weighted matrix is passed. Walks essentially
     allow repeated visits to the same node, whereas paths do not.
@@ -138,14 +139,7 @@ def count_walks(path, matrices):
     :return: The matrix giving the number of walks, where matrix[i, j], the ith node is the starting node and the
         jth node is the ending node
     """
-    size = matrices[path[0]].shape[0]
-
-    # initialize result with identity matrix
-    result = eye(size)
-    # Multiply by each metaedge in the metapath
-    for edge in path:
-        result *= matrices[edge]
-    return result
+    return np.prod(to_multiply)
 
 
 def find_repeated_node_indices(edge_names):
@@ -385,7 +379,7 @@ def interpolate_overcounting(extra_counts):
     return (get_elementwise_max(extra_counts) + sum(extra_counts)) / 2
 
 
-def estimate_count_from_repeats(path, edges, matrices, resolving_function=interpolate_overcounting):
+def estimate_count_from_repeats(path, edges, to_multiply, resolving_function=interpolate_overcounting):
     """
     Estimates the Path-Count based on the differnece between the Walk-Count and the Path-Count removing
     repated nodes for each metanode type individually.
@@ -402,7 +396,6 @@ def estimate_count_from_repeats(path, edges, matrices, resolving_function=interp
     """
 
     # Initialize values
-    to_multiply = [matrices[edge] for edge in path]
     repeated_nodes = find_repeated_node_indices(edges)
 
     repeat_indices = [v for v in repeated_nodes.values()]
@@ -542,7 +535,14 @@ def abab_3(repeat_indices, to_multiply):
     return result
 
 
-def count_paths(path, edges, matrices, verbose=False, uncountable_estimate_func=estimate_count_from_repeats,
+def get_matrices_to_multiply(path, matrices):
+    """
+    Returns the matrices that need to be multiplied in the given path
+    """
+    return [matrices[edge] for edge in path]
+
+
+def count_paths(path, edges, to_multiply, verbose=False, uncountable_estimate_func=estimate_count_from_repeats,
                 uncountable_params=None):
     """
     Counts paths removing repeats due to only one repeated metanode in the metapath.
@@ -566,7 +566,6 @@ def count_paths(path, edges, matrices, verbose=False, uncountable_estimate_func=
     :return: Sparse Matrix, containing path counts along the metapath.
     """
 
-    to_multiply = [matrices[edge] for edge in path]
     size = to_multiply[0].shape[0]
     repeated_nodes = find_repeated_node_indices(edges)
 
@@ -588,7 +587,7 @@ def count_paths(path, edges, matrices, verbose=False, uncountable_estimate_func=
         if len(repeat_indices[0]) > 2:
             if verbose:
                 print('4 Visits, Estimating')
-                return uncountable_estimate_func(path, edges, matrices, **uncountable_params)
+                return uncountable_estimate_func(path, edges, to_multiply, **uncountable_params)
 
         return count_removing_repeats(repeat_indices, to_multiply)
 
@@ -618,7 +617,7 @@ def count_paths(path, edges, matrices, verbose=False, uncountable_estimate_func=
 
                 if verbose:
                     print('Estimating')
-                result = uncountable_estimate_func(path, edges, matrices, **uncountable_params)
+                result = uncountable_estimate_func(path, edges, to_multiply, **uncountable_params)
                 return result
 
     elif len(repeated_nodes) > 2:
@@ -632,24 +631,21 @@ def count_paths(path, edges, matrices, verbose=False, uncountable_estimate_func=
         return diags([0] * size)
 
 
-def to_series(result, start_nodes, end_nodes, index_to_id, name=None):
+def to_series(result, start_ids, end_ids, name=None):
     """
     Convert a result matrix (containing pc, dwpc, degree values) to a Series with multiindex start_id, end_id.
 
     :param result: Sparse matrix containing the caluclation's result.
-    :param start_nodes: list of indices corresponding to the start of the path
-    :param end_nodes: list of indices corresponding to the end of the path
-    :param index_to_id: dict, to map the indices to an id
+    :param start_ids: list of ids corresponding to the start of the path
+    :param end_ids: list of ids corresponding to the end of the path
     :param name: string, name for the returned Series
 
     :return: pandas.Series, with multi-index start_id, end_ide and values corresponding to the metric calulated.
     """
-    dat = pd.DataFrame(result.todense()[start_nodes, :][:, end_nodes],
-                       index=[index_to_id[sid] for sid in start_nodes],
-                       columns=[index_to_id[eid] for eid in end_nodes])
+    dat = pd.DataFrame(result.todense(), index=start_ids, columns=end_ids)
 
     # Convert to series
-    series = dat.stack()
-    series.name = name
+    dat = dat.stack()
+    dat.name = name
 
-    return series
+    return dat

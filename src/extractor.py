@@ -15,15 +15,15 @@ class MatrixFormattedGraph(object):
     Class for adjacency matrix representation of the heterogeneous network.
     """
 
-    def __init__(self, node_file, edge_file, start_kind='Compound', end_kind='Disease',
+    def __init__(self, nodes, edges, start_kind='Compound', end_kind='Disease',
                  max_length=4, metapaths_file=None, w=0.4):
         """
         Initializes the adjacency matrices used for feature extraction.
 
-        :param node_file: string, location of the .csv file containing nodes formatted for neo4j import.
+        :param nodes: DataFrame or string, location of the .csv file containing nodes formatted for neo4j import.
             This format must include two required columns: One column labeled ':ID' with the unique id for each 
             node, and one column named ':LABEL' containing the metanode type for each node
-        :param edge_file: string, location of the .csv file containing edges formatted for neo4j import.
+        :param edges: DataFrame or string, location of the .csv file containing edges formatted for neo4j import.
             This format must include three required columns: One column labeled  ':START_ID' with the node id
             for the start of the edge, one labeled ':END_ID' with teh node id for the end of the edge and one
             labeled ':TYPE' describing the metaedge type.
@@ -36,12 +36,22 @@ class MatrixFormattedGraph(object):
             metapaths to be extracted.  If provided, this will be used to generate metapath information and
             the variables `start_kind`, `end_kind` and `max_length` will be ignored.  
             This file must contain the following keys: 'edge_abbreviations' and 'standard_edge_abbreviations' which 
-            matches the same format as ':TYPE' in the edge_file, 'edges' lists of each edge in the metapath. 
+            matches the same format as ':TYPE' in the edges, 'edges' lists of each edge in the metapath. 
         :param w: float between 0 and 1. Dampening factor for producing degree-weighted matrices
         """
         # Store the values of the different files
-        self.node_file = node_file
-        self.edge_file = edge_file
+        self.node_file = None
+        self.edge_file = None
+
+        if type(nodes) == str:
+            self.node_file = nodes
+        elif type(nodes) == pd.DataFrame:
+            self.node_df = nodes
+        if type(edges) == str:
+            self.edge_file = edges
+        elif type(edges) == pd.DataFrame:
+            self.edge_df = edges
+
         self.metapaths_file = metapaths_file
         self.w = w
         self.metagraph = None
@@ -65,7 +75,8 @@ class MatrixFormattedGraph(object):
 
     def read_node_file(self):
         """Reads the nodes file and stores as a DataFrame, also generates a mapping dictionaries."""
-        self.node_df = pd.read_csv(self.node_file, dtype={':ID': str})
+        if self.node_file:
+            self.node_df = pd.read_csv(self.node_file, dtype={':ID': str})
         self.nodes = self.node_df[':ID']
 
         # Get mapping from id to index and reverse
@@ -80,7 +91,8 @@ class MatrixFormattedGraph(object):
 
     def read_edge_file(self):
         """Reads the edge file and stores it as a DataFrame"""
-        self.edge_df = pd.read_csv(self.edge_file, dtype={':START_ID': str, ':END_ID': str})
+        if self.edge_file:
+            self.edge_df = pd.read_csv(self.edge_file, dtype={':START_ID': str, ':END_ID': str})
         self.edge_df = self.edge_df.dropna()
 
         # Split the metaedge name from its abbreviation if both are included
@@ -143,7 +155,7 @@ class MatrixFormattedGraph(object):
             edge_abbrev_dict = dict()
             metaedge_tuples = []
 
-            for i, kind in enumerate(tqdm(edge_kinds)):
+            for i, kind in enumerate(edge_kinds):
                 # the true edge name is everything before the final '_' character
                 # so if we have PROCESS_OF_PpoP, we still want to keep 'PROCESS_OF' with the underscores intact.
                 edge_name = '_'.join(kind.split('_')[:-1])
@@ -193,6 +205,9 @@ class MatrixFormattedGraph(object):
         time.sleep(0.5)
         abbrev_dict, edge_tuples = get_abbrev_dict_and_edge_tuples()
 
+        self.abbrev_dict = abbrev_dict
+        self.edge_tuples = edge_tuples
+
         self.metagraph = MetaGraph.from_edge_tuples(edge_tuples, abbrev_dict)
 
     def get_metapaths(self, start_kind, end_kind, max_length):
@@ -200,7 +215,7 @@ class MatrixFormattedGraph(object):
         if not self.metagraph:
             self.get_metagraph()
 
-        metapaths = self.metagraph.extract_metapaths(start_kind, end_kind, max_length)
+        metapaths = self.metagraph.extract_metapaths(start_kind, end_kind, max_length) 
 
         self.metapaths = dict()
         for mp in metapaths:
@@ -278,7 +293,7 @@ class MatrixFormattedGraph(object):
         Ensures that a given id is either a Node type, list of node ids, or list of node indices.
 
         :param ids: string or list of strings or ints. The ids to be validated
-        :return: list, the indicies corresponding to the ids in the matricies.
+        :return: list, the indicies corresponding to the ids in the matrices.
         """
         if type(ids) == str:
             return self.metanode_idxs[ids]
@@ -325,10 +340,10 @@ class MatrixFormattedGraph(object):
 
     def process_extraction_results(self, result, metapaths, start_nodes, end_nodes):
         """
-        Given a list of matricies and a list of metapaths, processes the feature extraction into a pandas DataFrame.
+        Given a list of matrices and a list of metapaths, processes the feature extraction into a pandas DataFrame.
 
 
-        :param result: list of matricies, the feature extraction result.
+        :param result: list of matrices, the feature extraction result.
         :param metapaths: list of strings, the names of the metapaths extracted
         :param start_nodes: string or list, title of the metanode of the nodes for the start of the metapaths.
             If a list, can be IDs or indicies corresponding to a subset of starting nodes for the feature.
@@ -346,12 +361,13 @@ class MatrixFormattedGraph(object):
         print('\nReformating results...')
         time.sleep(0.5)
 
+        result = [r[start_idxs, :][:, end_idxs] for r in result]
         results = pd.DataFrame()
 
         # Currently running in series.  Extensive testing has found no incense in speed via Parallel processing
         # However, parallel usually results in an inaccurate counter.
-        for mp, dwpc in tqdm(zip(metapaths, result), total=len(metapaths)):
-            results[mp] = mt.to_series(dwpc, start_idxs, end_idxs, self.index_to_nid, name=mp)
+        for i in tqdm(range(len(metapaths))):
+            results[metapaths[i]] = mt.to_series(result[i], start_ids, end_ids, name=metapaths[i])
 
         results = results.reset_index(drop=False)
         results = results.rename(columns={'level_0': start_name, 'level_1': end_name})
@@ -391,13 +407,15 @@ class MatrixFormattedGraph(object):
         # Prepare functions for parallel processing
         arguments = []
         for mp in metapaths:
-            arguments.append({'path': mt.get_path(mp, self.metapaths),
-                              'edges': mt.get_edge_names(mp, self.metapaths),
-                              'verbose': verbose, 'matrices': self.degree_weighted_matrices})
+            path = mt.get_path(mp, self.metapaths)
+            to_multiply = mt.get_matrices_to_multiply(path, self.degree_weighted_matrices)
+            edges = mt.get_edge_names(mp, self.metapaths)
+            arguments.append({'path': path, 'edges': edges, 'to_multiply': to_multiply, 'verbose': verbose})
 
         # Run DPWC calculation processes in parallel
         result = parallel_process(array=arguments, function=mt.count_paths, use_kwargs=True, 
                                   n_jobs=n_jobs, front_num=0)
+        del(arguments)
 
         # Process and return results
         results = self.process_extraction_results(result, metapaths, start_nodes, end_nodes)
@@ -435,6 +453,10 @@ class MatrixFormattedGraph(object):
         arguments = []
         for mp in metapaths:
             arguments.append({'path': mt.get_path(mp, self.metapaths), 'matrices': self.degree_weighted_matrices})
+        for mp in metapaths:
+            path = mt.get_path(mp, self.metapaths)
+            to_multiply = mt.get_matrices_to_multiply(path, self.degree_weighted_matrices)
+            arguments.append({'path': path, 'to_multiply': to_multiply})
         # Run DWWC calculation processes in parallel
         result = parallel_process(array=arguments, function=mt.count_walks, use_kwargs=True, 
                                   n_jobs=n_jobs, front_num=0)
