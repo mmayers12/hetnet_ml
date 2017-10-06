@@ -48,11 +48,11 @@ class MatrixFormattedGraph(object):
         if type(nodes) == str:
             self.node_file = nodes
         elif type(nodes) == pd.DataFrame:
-            self.node_df = nodes
+            self.node_df = nodes.copy()
         if type(edges) == str:
             self.edge_file = edges
         elif type(edges) == pd.DataFrame:
-            self.edge_df = edges
+            self.edge_df = edges.copy()
 
         self.metapaths_file = metapaths_file
         self.w = w
