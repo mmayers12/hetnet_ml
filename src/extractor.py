@@ -7,7 +7,9 @@ from tqdm import tqdm
 from scipy.sparse import diags
 from hetio.hetnet import MetaGraph
 from parallel import parallel_process
+import graph_tools as gt
 import matrix_tools as mt
+
 
 
 class MatrixFormattedGraph(object):
@@ -104,6 +106,7 @@ class MatrixFormattedGraph(object):
             edge_abbrev_dict = {e: abv for e, abv in zip(e_types, self.metaedges)}
             self.edge_df['abbrev'] = self.edge_df[':TYPE'].apply(lambda t: edge_abbrev_dict[t])
 
+        ##%%TODO Ideally all eges should have their abbreviations included, so this should never be run...
         else:
             self.metaedges = self.edge_df[':TYPE'].unique()
             self.edge_df['abbrev'] = self.edge_df[':TYPE']
@@ -122,92 +125,9 @@ class MatrixFormattedGraph(object):
     def get_metagraph(self):
         """Generates class variable metagraph, an instance of hetio.hetnet.MetaGraph"""
 
-        def get_abbrev_dict_and_edge_tuples():
-            """
-            Returns an abbreviation dictionary generated from class variables.
-
-            Edge types are formatted as such:
-                edge-name_{START_NODE_ABBREV}{edge_abbrev}{END_NODE_ABBREV}
-                e.g. Compound-binds-Gene is: binds_CbG
-
-            Therefore, abbreviations for edge and node types can be extracted from the full edge name.
-            """
-            def get_direction(t):
-                """Finds the direction of a metaedge from its abbreviaton"""
-                if '>' in t:
-                    return 'forward'
-                elif '<' in t:
-                    return 'backward'
-                else:
-                    return 'both'
-
-            node_kinds = self.node_df[':LABEL'].unique()
-            edge_kinds = self.edge_df[':TYPE'].unique()
-
-            # If we have a lot of edges, lets reduce to one of each type for faster queries later.
-            edge_kinds_df = self.edge_df.drop_duplicates(subset=[':TYPE'])
-
-            # Extract just the abbreviation portion
-            edge_abbrevs = [e.split('_')[-1] for e in edge_kinds]
-
-            # Initialize the abbreviation dict (key = fullname, value = abbreviation)
-            node_abbrev_dict = dict()
-            edge_abbrev_dict = dict()
-            metaedge_tuples = []
-
-            for i, kind in enumerate(edge_kinds):
-                # the true edge name is everything before the final '_' character
-                # so if we have PROCESS_OF_PpoP, we still want to keep 'PROCESS_OF' with the underscores intact.
-                edge_name = '_'.join(kind.split('_')[:-1])
-
-                # initialize the abbreviations
-                edge_abbrev = ''
-                start_abbrev = ''
-                end_abbrev = ''
-
-                start = True
-                for char in edge_abbrevs[i]:
-                    # Direction is not in abbreviations, skip to next character
-                    if char == '>' or char == '<':
-                        continue
-
-                    # When the abbreviation is in uppercase, abbreviating for node type
-                    if char == char.upper():
-                        if start:
-                            start_abbrev += char
-                        else:
-                            end_abbrev += char
-
-                    # When abbreviation is lowercase, you have the abbreviation for the edge
-                    if char == char.lower():
-                        # now no longer on the start nodetype, so set to false
-                        start = False
-                        edge_abbrev += char
-
-                # Have proper edge abbreviation
-                edge_abbrev_dict[edge_name] = edge_abbrev
-
-                # Have abbreviations, but need to get corresponding types for start and end nodes
-                edge = edge_kinds_df[edge_kinds_df[':TYPE'] == kind].iloc[0]
-                start_kind = self.idx_to_metanode[self.nid_to_index[edge[':START_ID']]]
-                end_kind = self.idx_to_metanode[self.nid_to_index[edge[':END_ID']]]
-
-                node_abbrev_dict[start_kind] = start_abbrev
-                node_abbrev_dict[end_kind] = end_abbrev
-
-                direction = get_direction(kind)
-                edge_tuple = (start_kind, end_kind, edge_name, direction)
-                metaedge_tuples.append(edge_tuple)
-
-            return {**node_abbrev_dict, **edge_abbrev_dict}, metaedge_tuples
-
         print('Initializing metagraph...')
         time.sleep(0.5)
-        abbrev_dict, edge_tuples = get_abbrev_dict_and_edge_tuples()
-
-        self.abbrev_dict = abbrev_dict
-        self.edge_tuples = edge_tuples
-
+        abbrev_dict, edge_tuples = gt.get_abbrev_dict_and_edge_tuples(self.node_df, self.edge_df)
         self.metagraph = MetaGraph.from_edge_tuples(edge_tuples, abbrev_dict)
 
     def get_metapaths(self, start_kind, end_kind, max_length):
@@ -353,26 +273,33 @@ class MatrixFormattedGraph(object):
         :return: pandas.DataFrame, with columns for start_node_id, end_node_id and columns for each of the metapath 
             features calculated.
         """
+        from itertools import product
+
         # Get information on nodes needed for DataFrame formatting.
         start_idxs, end_idxs, start_type, end_type, start_ids, end_ids, start_name, end_name = \
             self.prep_node_info_for_extraction(start_nodes, end_nodes)
 
-        # Format the matrices into a DataFrame
-        print('\nReformating results...')
+        # Slice the resultant matrices to find only start and end results
+        print('\nSub-setting resultant matrices...')
         time.sleep(0.5)
 
-        result = [r[start_idxs, :][:, end_idxs] for r in result]
-        results = pd.DataFrame()
+        result = [r[start_idxs, :][:, end_idxs] for r in tqdm(result)]
+
+        # Turn each result matrix into a series
+        print('\nFormatting results to series...')
+        time.sleep(0.5)
+        results = []
 
         # Currently running in series.  Extensive testing has found no incense in speed via Parallel processing
         # However, parallel usually results in an inaccurate counter.
         for i in tqdm(range(len(metapaths))):
-            results[metapaths[i]] = mt.to_series(result[i], start_ids, end_ids, name=metapaths[i])
+            results.append(mt.to_series(result[i], name=metapaths[i]).reset_index(drop=True))
 
-        results = results.reset_index(drop=False)
-        results = results.rename(columns={'level_0': start_name, 'level_1': end_name})
+        # Past all the series together into a DataFrame
+        print('\nConcatenating series to DataFrame...')
+        start_end_df = pd.DataFrame(list(product(start_ids, end_ids)), columns=[start_name, end_name])
 
-        return results
+        return pd.concat([start_end_df]+results, axis=1)
 
     def extract_dwpc(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=False, n_jobs=1):
         """
@@ -465,7 +392,8 @@ class MatrixFormattedGraph(object):
         results = self.process_extraction_results(result, metapaths, start_nodes, end_nodes)
         return results
 
-    def extract_degrees(self, start_nodes=None, end_nodes=None):
+
+    def extract_degrees(self, start_nodes=None, end_nodes=None, subset=None):
         """
         Extracts degree features from the metagraph
 
@@ -496,7 +424,10 @@ class MatrixFormattedGraph(object):
             self.get_metagraph()
 
         # Loop through each edge in the metagraph
-        edges = list(self.metagraph.get_edges())
+        if not subset:
+            edges = list(self.metagraph.get_edges())
+        else:
+            edges = [e for e in self.metagraph.get_edges() if e.get_abbrev() in subset]
         for edge in tqdm(edges):
 
                 # Get those edges that link to start and end metanodes
@@ -524,3 +455,61 @@ class MatrixFormattedGraph(object):
         result = result.reset_index()
         cols = sorted([c for c in result.columns if c not in [start_name, end_name]])
         return result[[start_name, end_name]+cols]
+
+    def extract_prior_estimate(self, edge):
+        """
+        Estimates the prior probability that a target edge exists between a given source and target node pair.
+        Prior probability is dependant on the degrees of the nodes across the given edge.
+        Further discussion here: https://think-lab.github.io/d/201/
+        
+        :param edge: string, the abbreviation of the metaedge across which the prior probability will be extracted.
+            e.g. 'CtD' for the Compound-treats-Disease edge.
+        :return: pandas.DataFrame, with all combinations of instances of the Start and End metanodes for the edge,
+            with a prior probability of the edge linking them.
+        """
+
+        def estimate_prior(out_degree, in_degree, total):
+            """
+            Attempts to calculate the prior probability via the following formula:
+
+            for example if there are 755 Compund-treats-Disease edges
+            compound A has 3 compound-treats-disease edges
+            disease Z has 5 compound-treats-diease edges
+
+            Prob that compound A treats disease Z = 
+                1 - (750/755 * 749/754 * 748/753)
+            """
+
+            res = 1
+            for i in range(out_degree):
+                res *= ((total - i - in_degree) / (total - i))
+
+            return 1 - res
+
+        # Ensure the metagraph has be initialized
+        if not self.metagraph:
+            self.metagraph = self.get_metagraph()
+
+        # Extract the source and target information from the metagraph
+        mg_edge = self.metagraph.metapath_from_abbrev(edge).edges[0]
+        start_nodes = mg_edge.source.get_id()
+        end_nodes = mg_edge.target.get_id()
+        inv_edge = mg_edge.inverse.get_abbrev()
+
+        # Get degrees across edge, which are needed for this computation
+        degrees = self.extract_degrees(start_nodes, end_nodes, edge)
+
+        # Compute the prior for each pair
+        total = degrees.drop_duplicates(subset=start_nodes.lower()+'_id')[edge].sum()
+        result = []
+        for row in degrees.itertuples(index=False):
+            result.append(estimate_prior(row[2], row[3], total))
+        degrees['prior'] = result
+
+        # the sum of the probabilities must add up to the total number of positives
+        weighting_factor = total / degrees['prior'].sum()
+        degrees['prior'] = degrees['prior'] * weighting_factor
+
+        return degrees[[start_nodes.lower()+'_id', end_nodes.lower()+'_id', 'prior']]
+
+

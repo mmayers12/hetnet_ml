@@ -631,7 +631,7 @@ def count_paths(path, edges, to_multiply, verbose=False, uncountable_estimate_fu
         return diags([0] * size)
 
 
-def to_series(result, start_ids, end_ids, name=None):
+def to_series(result, start_ids=None, end_ids=None, name=None):
     """
     Convert a result matrix (containing pc, dwpc, degree values) to a Series with multiindex start_id, end_id.
 
