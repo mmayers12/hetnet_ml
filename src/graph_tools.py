@@ -97,10 +97,10 @@ def get_abbrev_dict_and_edge_tuples(nodes, edges):
 def combine_nodes_and_edges(nodes, edges):
     """Combines the nodes and edges frames into a single dataframe for simple analysis"""
 
-    id_to_name = map_id_to_value('name')
-    id_to_label = map_id_to_value(':LABEL')
+    id_to_name = map_id_to_value(nodes, 'name')
+    id_to_label = map_id_to_value(nodes, ':LABEL')
 
-    out_df = nodes.copy()
+    out_df = edges.copy()
 
     out_df['start_name'] = out_df[':START_ID'].apply(lambda i: id_to_name[i])
     out_df['end_name'] = out_df[':END_ID'].apply(lambda i: id_to_name[i])
@@ -110,6 +110,25 @@ def combine_nodes_and_edges(nodes, edges):
 
     return out_df
 
+
 def get_node_degrees(nodes):
     """Determines the degrees for all nodes"""
     return pd.concat([nodes[':START_ID'], nodes[':END_ID']]).value_counts()
+
+
+def add_colons(df):
+    """Adds colons to column names required for Neo4j import"""
+    if 'LABEL' in df.columns:
+        return df.rename(columns={'ID': ':ID', 'LABEL': ':LABEL'})
+    elif 'TYPE' in df.columns:
+        return df.rename(columns={'START_ID': ':START_ID', 'END_ID': ':END_ID', 'TYPE': ':TYPE'})
+    raise ValueError('LABEL or TYPE not in the columns')
+
+
+def remove_colons(df):
+    """Removes colons from column labels to make them queryable"""
+    new_labels = [c[1:] for c in df.columns if str(c).startswith(':')]
+    old_labels = [c for c in df.columns if str(c).startswith(':')]
+    change_dict = {k: v for k, v in zip(old_labels, new_labels)}
+
+    return df.rename(columns=change_dict)
