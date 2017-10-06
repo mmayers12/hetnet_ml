@@ -124,7 +124,7 @@ def weight_by_degree(matrix, w=0.4, directed=False):
         matrix_out = matrix_out.multiply(weighted_degree)   # symmetric matrix, so second transpose unneeded
 
     # Return weighted edges
-    return matrix_out.tocsc()
+    return matrix_out.astype('float32').tocsc()
 
 
 def count_walks(path, to_multiply):
@@ -448,6 +448,9 @@ def calc_abab(mats, return_steps=False):
 
     result = np.prod(mats) - overcount1 - overcount2 + doubly_removed
 
+    # ensure we didn't subtract to produce negative counts
+    result[result < 0] = 0
+
     if return_steps:
         return result, step1, step2
 
@@ -532,6 +535,8 @@ def abab_3(repeat_indices, to_multiply):
         result = (result * to_multiply[-1]) - overcount3
     else:
         return None
+    # ensure we didn't subtract to produce negative counts
+    result[result < 0] = 0
     return result
 
 
@@ -613,12 +618,12 @@ def count_paths(path, edges, to_multiply, verbose=False, uncountable_estimate_fu
             result = determine_abab_kind(repeats, to_multiply)
             if result is not None:
                 return result
+
             else:
 
                 if verbose:
                     print('Estimating')
-                result = uncountable_estimate_func(path, edges, to_multiply, **uncountable_params)
-                return result
+                return uncountable_estimate_func(path, edges, to_multiply, **uncountable_params)
 
     elif len(repeated_nodes) > 2:
         print('Not yet implemented', path)
