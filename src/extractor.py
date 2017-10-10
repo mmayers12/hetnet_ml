@@ -95,7 +95,7 @@ class MatrixFormattedGraph(object):
         """Reads the edge file and stores it as a DataFrame"""
         if self.edge_file:
             self.edge_df = pd.read_csv(self.edge_file, dtype={':START_ID': str, ':END_ID': str})
-        self.edge_df = self.edge_df.dropna()
+        self.edge_df = self.edge_df.dropna(subset=[':START_ID', ':END_ID', ':TYPE'])
 
         # Split the metaedge name from its abbreviation if both are included
         if all(self.edge_df[':TYPE'].str.contains('_')):
@@ -322,7 +322,7 @@ class MatrixFormattedGraph(object):
 
         # If not given a list of metapaths, calculate for all
         if not metapaths:
-            metapaths = list(self.metapaths.keys())
+            metapaths = sorted(list(self.metapaths.keys()))
 
         # Validate the ids before running the calculation
         self.validate_ids(start_nodes)
@@ -456,7 +456,7 @@ class MatrixFormattedGraph(object):
         cols = sorted([c for c in result.columns if c not in [start_name, end_name]])
         return result[[start_name, end_name]+cols]
 
-    def extract_prior_estimate(self, edge):
+    def extract_prior_estimate(self, edge, start_nodes=None, end_nodes=None):
         """
         Estimates the prior probability that a target edge exists between a given source and target node pair.
         Prior probability is dependant on the degrees of the nodes across the given edge.
@@ -492,17 +492,23 @@ class MatrixFormattedGraph(object):
 
         # Extract the source and target information from the metagraph
         mg_edge = self.metagraph.metapath_from_abbrev(edge).edges[0]
-        start_nodes = mg_edge.source.get_id()
-        end_nodes = mg_edge.target.get_id()
-        inv_edge = mg_edge.inverse.get_abbrev()
+        if not start_nodes:
+            start_nodes = mg_edge.source.get_id()
+        if not end_nodes:
+            end_nodes = mg_edge.target.get_id()
 
         # Get degrees across edge, which are needed for this computation
+        print('\nExtracting degrees along edge {}'.format(edge))
+        time.sleep(0.5)
         degrees = self.extract_degrees(start_nodes, end_nodes, edge)
 
         # Compute the prior for each pair
-        total = degrees.drop_duplicates(subset=start_nodes.lower()+'_id')[edge].sum()
+        print('\nComputing Prior...')
+        time.sleep(0.5)
+        subset = degrees.iloc[:, 0].name
+        total = degrees.drop_duplicates(subset=subset)[edge].sum()
         result = []
-        for row in degrees.itertuples(index=False):
+        for row in tqdm(degrees.itertuples(index=False), total=len(degrees)):
             result.append(estimate_prior(row[2], row[3], total))
         degrees['prior'] = result
 
@@ -510,6 +516,8 @@ class MatrixFormattedGraph(object):
         weighting_factor = total / degrees['prior'].sum()
         degrees['prior'] = degrees['prior'] * weighting_factor
 
-        return degrees[[start_nodes.lower()+'_id', end_nodes.lower()+'_id', 'prior']]
+        return_cols = [c for c in degrees.columns if c.endswith('_id')] + ['prior']
+
+        return degrees[return_cols]
 
 
