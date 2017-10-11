@@ -283,23 +283,23 @@ class MatrixFormattedGraph(object):
         print('\nSub-setting resultant matrices...')
         time.sleep(0.5)
 
-        result = [r[start_idxs, :][:, end_idxs] for r in tqdm(result)]
+        for i in tqdm(range(len(result))):
+            result[i] = result[i][start_idxs, :][:, end_idxs]
 
         # Turn each result matrix into a series
         print('\nFormatting results to series...')
         time.sleep(0.5)
-        results = []
 
         # Currently running in series.  Extensive testing has found no incense in speed via Parallel processing
         # However, parallel usually results in an inaccurate counter.
         for i in tqdm(range(len(metapaths))):
-            results.append(mt.to_series(result[i], name=metapaths[i]).reset_index(drop=True))
+            result[i] = mt.to_series(result[i], name=metapaths[i]).reset_index(drop=True)
 
         # Past all the series together into a DataFrame
         print('\nConcatenating series to DataFrame...')
         start_end_df = pd.DataFrame(list(product(start_ids, end_ids)), columns=[start_name, end_name])
 
-        return pd.concat([start_end_df]+results, axis=1)
+        return pd.concat([start_end_df]+result, axis=1)
 
     def extract_dwpc(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=False, n_jobs=1):
         """
