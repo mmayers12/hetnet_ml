@@ -1,5 +1,6 @@
 import pandas as pd
 
+
 def get_direction_from_abbrev(abbrev):
     """Finds the direction of a metaedge from its abbreviaton"""
     if '>' in abbrev:
@@ -111,9 +112,9 @@ def combine_nodes_and_edges(nodes, edges):
     return out_df
 
 
-def get_node_degrees(nodes):
+def get_node_degrees(edges):
     """Determines the degrees for all nodes"""
-    return pd.concat([nodes[':START_ID'], nodes[':END_ID']]).value_counts()
+    return pd.concat([edges[':START_ID'], edges[':END_ID']]).value_counts()
 
 
 def add_colons(df):
@@ -132,3 +133,13 @@ def remove_colons(df):
     change_dict = {k: v for k, v in zip(old_labels, new_labels)}
 
     return df.rename(columns=change_dict)
+
+
+
+def determine_split_string(edge):
+    if '-' in edge:
+        return ' - '
+    elif '>' in edge:
+        return ' > '
+    elif '<' in edge:
+        return ' < '

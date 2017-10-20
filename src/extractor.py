@@ -58,6 +58,9 @@ class MatrixFormattedGraph(object):
         self.w = w
         self.metagraph = None
 
+        self.start_kind = start_kind
+        self.end_kind = end_kind
+
         # Read the information in the files
         print('Reading file information...')
         self.read_node_file()
@@ -520,4 +523,71 @@ class MatrixFormattedGraph(object):
 
         return degrees[return_cols]
 
+    def is_self_referential(self, edge):
+        # Determine if edge is directed or not to choose the proper splitting character
+        split_str = gt.determine_split_string(edge)
 
+        # split the edge
+        edge_split = edge.split(split_str)
+
+        return edge_split[0] == edge_split[-1] and (edge_split[0] == self.start_kind or edge_split[0] == self.end_kind)
+
+    def contains_self_referential(self, edges):
+        return sum([self.is_self_referential(e) for e in edges]) > 0
+
+    def duplcated_edge_source_or_target_edge(self, edges):
+        prev_edge = ['', '', '']
+        for edge in edges:
+            split_str = gt.determine_split_string(edge)
+            edge_split = edge.split(split_str)
+
+            # Ensure start and end on same edge, and same edge semmantics
+            if prev_edge[0] == edge_split[-1] and prev_edge[1] == edge_split[1]:
+                if prev_edge[0] == self.start_kind or prev_edge[0] == self.end_kind:
+                    return True
+
+            prev_edge = edge_split
+
+        return False
+
+    def generate_blacklist(self, target_edge):
+
+        def contains_target(std_abbrevs):
+            return target_edge in std_abbrevs
+
+        def is_target(edge):
+            return edge == target_edge
+
+        # Ensure the metagraph has be initialized
+        if not self.metagraph:
+            self.metagraph = self.get_metagraph()
+
+        blacklist = []
+
+        # Get degree feature blacklists
+        target = [e for e in self.metagraph.get_edges() if e.get_abbrev() == target_edge][0]
+        reverse_target = target.inverse.get_abbrev()
+
+        blacklist.append('degree_'+target_edge)
+        blacklist.append('degree_'+reverse_target)
+
+        # Get the metapaths features to be blacklisted
+        for mp, info in self.metapaths.items():
+            num_target = sum([is_target(e) for e in info['standard_edge_abbreviations']])
+            num_self_refs = sum([self.is_self_referential(e) for e in info['edges']])
+
+            # Remove edges with overuse of target edge.
+            if num_target > 1:
+                blacklist.append('dwpc_' + mp)
+
+            # Remove those with 2 self-referential edges and a target edge
+            elif num_self_refs > 1 and num_target > 0:
+                blacklist.append('dwpc_' + mp)
+
+            # Remove those with a self-reverntal edge, travel across the same edge, and a target:
+            elif self.contains_self_referential(info['edges']) \
+                    and contains_target(info['standard_edge_abbreviations']) \
+                    and self.duplcated_edge_source_or_target_edge(info['edges']):
+                blacklist.append('dwpc_' + mp)
+
+        return blacklist
