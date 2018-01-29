@@ -117,23 +117,62 @@ def get_node_degrees(edges):
     return pd.concat([edges[':START_ID'], edges[':END_ID']]).value_counts()
 
 
-def add_colons(df):
-    """Adds colons to column names required for Neo4j import"""
-    if 'LABEL' in df.columns:
-        return df.rename(columns={'ID': ':ID', 'LABEL': ':LABEL'})
-    elif 'TYPE' in df.columns:
-        return df.rename(columns={'START_ID': ':START_ID', 'END_ID': ':END_ID', 'TYPE': ':TYPE'})
-    raise ValueError('LABEL or TYPE not in the columns')
+def add_colons(df, id_name='', col_types={}):
+    """
+    Adds the colons to column names before neo4j import (presumably removed by `remove_colons` to make queryable).
+    User can also specify  a name for the ':ID' column and data types for property columns.
 
+    :param df: DataFrame, the neo4j import data without colons in it (e.g. to make it queryable).
+    :param id_name: String, name for the id property.  If importing a CSV into neo4j without this property, Neo4j may
+        use its own internal id's losing this property.
+    :param col_types: dict, data types for other columns in the form of column_name:data_type
+    :return: DataFrame, with neo4j compatible column headings
+    """
+    reserved_cols = ['id', 'label', 'start_id', 'end_id', 'type']
 
-def remove_colons(df):
-    """Removes colons from column labels to make them queryable"""
-    new_labels = [c[1:] for c in df.columns if str(c).startswith(':')]
-    old_labels = [c for c in df.columns if str(c).startswith(':')]
-    change_dict = {k: v for k, v in zip(old_labels, new_labels)}
+    # Get the reserved column names that need to be changed
+    to_change = [c for c in df.columns if c.lower() in reserved_cols]
+    if not to_change:
+        raise ValueError("Neo4j Reserved columns (['id', 'label' 'start_id', 'end_id', 'type'] not " +
+                         "found in DataFrame")
+
+    # Add any column names that need to be types
+    to_change += [c for c in df.columns if c in col_types.keys()]
+
+    change_dict = {}
+    for name in to_change:
+        # Reserved column names go after the colon
+        if name in reserved_cols:
+            if name.lower() == 'id':
+                new_name = id_name + ':' + name.upper()
+            else:
+                new_name = ':' + name.upper()
+        else:
+            # Data types go after the colon, while names go before.
+            new_name = name + ':' + col_types[name].upper()
+        change_dict.update({name: new_name})
 
     return df.rename(columns=change_dict)
 
+
+def remove_colons(df):
+    """
+    Removes colons from column headers formatted for neo4j import to make them queryable
+
+    :param df: DataFrame, formatted for neo4j import (column lables ':ID', ':LABEL, 'name:STRING' etc).
+    :return: DataFrame, with column names that are queryable (e.g. 'id', 'label', 'name').
+    """
+    # Figure out which columns have : in them
+    to_change = [c for c in df.columns if ':' in str(c)]
+    new_labels = [c.lower().split(':') for c in to_change]
+
+    # keep the reserved types, or names
+    reserved_cols = ['id', 'label', 'start_id', 'end_id', 'type']
+    new_labels = [l[1] if l[1] in reserved_cols else l[0] for l in new_labels]
+
+    # return the DataFrame with the new column headers
+    change_dict = {k: v for k, v in zip(to_change, new_labels)}
+    return df.rename(columns=change_dict)
 
 
 def determine_split_string(edge):
