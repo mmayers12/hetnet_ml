@@ -1,4 +1,6 @@
+import random
 import pandas as pd
+from collections import OrderedDict
 
 
 def get_direction_from_abbrev(abbrev):
@@ -182,3 +184,170 @@ def determine_split_string(edge):
         return ' > '
     elif '<' in edge:
         return ' < '
+
+
+def permute_edges(edges, directed=False, multiplier=10, excluded_edges=None, seed=0):
+    """
+    Permutes the edges of one metaedge in a graph while preserving the degree of each node.
+    
+    :param edges: DataFrame, edges information
+    :param directed: bool, whether or not the edge is directed
+    :param multiplier: int, governs the number of permutations, multiplied by number of edges
+    :param excluded_edges: DataFrame, edges to exclude from final permuted edges
+    :param seed: int, random state for analysis
+    
+    :return permuted_edges, stats: DataFrame, DataFrame - the permuted start and end ids, the permutation stats. 
+    """
+    random.seed(seed)
+
+    orig_columns = edges.columns
+    edges = remove_colons(edges)
+    col_name_mapper = {k: v for k, v in zip(edges.columns, orig_columns)}
+
+    # There shouldn't be any duplicate edges in the grpah, but throw error just in case
+    assert len(edges) == len(edges.drop_duplicates(subset=['start_id', 'end_id']))
+
+    # Ensure only 1 edge type was passed
+    assert edges['type'].nunique() == 1
+    e_type = edges['type'].unique()[0]
+
+    edge_list = [(e.start_id, e.end_id) for e in edges.itertuples(index=False)]
+    edge_set = set(edge_list)
+    orig_edge_set = edge_set.copy()
+
+    if excluded_edges is not None:
+        excluded_edge_set = set([(e.start_id, e.end_id) for e in excluded_edges.itertuples(index=False)])
+    else:
+        excluded_edge_set = set()
+
+    edge_number = len(edges)
+    n_perm = int(edge_number * multiplier)
+
+    # Initialize some perumtation stats
+    count_self_loop = 0
+    count_duplicate = 0
+    count_undir_dup = 0
+    count_excluded = 0
+
+    step = max(1, n_perm // 10)
+    print_at = list(range(step, n_perm, step)) + [n_perm - 1]
+
+    stats = list()
+
+    for i in range(n_perm):
+
+        # Same two random edges without replacement
+        i_0 = random.randrange(edge_number)
+        i_1 = i_0
+        while i_0 == i_1:
+            i_1 = random.randrange(edge_number)
+
+        edge_0 = edge_list[i_0]
+        edge_1 = edge_list[i_1]
+
+        unaltered_edges = [edge_0, edge_1]
+        swapped_edges = [(edge_0[0], edge_1[1]), (edge_1[0], edge_0[1])]
+
+        # Validate the new paring
+        valid = False
+        for edge in swapped_edges:
+            # Self Loops
+            if edge[0] == edge[1]:
+                count_self_loop += 1
+                break
+                # Duplicate Edges
+            if edge in edge_set:
+                count_duplicate += 1
+                break
+                # Duplicate Undirected Edges
+            if not directed and (edge[1], edge[0]) in edge_set:
+                count_undir_dup += 1
+                break
+                # Edge is excluded
+            if edge in excluded_edge_set:
+                count_excluded += 1
+                break
+                # If we made it here, we have a valid edge
+        else:
+            valid = True
+
+        # If BOTH new edges are valid
+        if valid:
+
+            # Change the edge list
+            edge_list[i_0] = swapped_edges[0]
+            edge_list[i_1] = swapped_edges[1]
+
+            # Fix the sets for quick hashing
+            for edge in unaltered_edges:
+                edge_set.remove(edge)
+            for edge in swapped_edges:
+                edge_set.add(edge)
+
+        if i in print_at:
+            stat = OrderedDict()
+            stat['cumulative_attempts'] = i
+            index = print_at.index(i)
+            stat['attempts'] = print_at[index] + 1 if index == 0 else print_at[index] - print_at[index - 1]
+            stat['complete'] = (i + 1) / n_perm
+            stat['unchanged'] = len(orig_edge_set & edge_set) / len(edges)
+            stat['self_loop'] = count_self_loop / stat['attempts']
+            stat['duplicate'] = count_duplicate / stat['attempts']
+            stat['undirected_duplicate'] = count_undir_dup / stat['attempts']
+            stat['excluded'] = count_excluded / stat['attempts']
+            stats.append(stat)
+
+            count_self_loop = 0
+            count_duplicate = 0
+            count_undir_dup = 0
+            count_excluded = 0
+
+    assert len(edge_list) == edge_number
+    out_edges = pd.DataFrame({'start_id': [edge[0] for edge in edge_list],
+                              'end_id': [edge[1] for edge in edge_list],
+                              'type': [e_type] * edge_number})
+
+    out_edges = out_edges.rename(columns=col_name_mapper)
+
+    return out_edges, pd.DataFrame(stats)
+
+
+def permute_graph(edges, multiplier=10, excluded_edges=None, seed=0):
+    """
+    Permutes the all of the metaedges types for those given in a graph file.
+    
+    :param edges: DataFrame, the edges to be permuted 
+    :param multiplier: int, governs the number of permutations to be performed
+    :param excluded_edges: DataFrame, edges to be disallowed from final permutations
+    :param seed: int, random state for analysis for reproduciability
+    
+    :return permuted_graph, stats: DataFrame, DataFrame - the edges of the graph permuted, stats on the permutations.  
+    """
+    # Change columns names to pandas standard
+    orig_columns = edges.columns
+    edges = remove_colons(edges)
+    col_name_mapper = {k: v for k, v in zip(edges.columns, orig_columns)}
+
+    edge_types = edges['type'].unique()
+
+    edge_stats = []
+    permuted_edges = []
+    for i, etype in enumerate(edge_types):
+        to_permute = edges.query('type == @etype').copy()
+
+        directed = '>' in etype or '<' in etype
+        pedge, stats = permute_edges(to_permute, directed=directed, multiplier=multiplier,
+                                     excluded_edges=excluded_edges, seed=seed + len(to_permute))
+
+        permuted_edges.append(pedge)
+
+        stats['etype'] = etype
+        edge_stats.append(stats)
+
+    stats = pd.concat(edge_stats)
+    permuted_graph = pd.concat(permuted_edges)
+
+    # Return column names to neo4j standards if applicable
+    permuted_graph = permuted_graph.rename(columns=col_name_mapper)
+
+    return permuted_graph, stats
