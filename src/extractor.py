@@ -395,6 +395,99 @@ class MatrixFormattedGraph(object):
         results = self.process_extraction_results(result, metapaths, start_nodes, end_nodes)
         return results
 
+    def extract_path_count(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=False, n_jobs=1):
+        """
+        Extracts path counts metrics for the given metapaths.  If no metapaths are given, will calcualte for all metapaths.
+
+        :param metapaths: list or None, the metapaths paths to calculate DWPC values for.  List must be a subset of
+            those found in metapahts.json.  If None, will calcualte DWPC values for metapaths in the metapaths.json
+            file.
+        :param start_nodes: String or list, String title of the metanode start of the metapaths.
+            If a list, can be IDs or indicies corresponding to a subset of starting nodes for the DWPC.
+        :param end_nodes: String or list, String title of the metanode for the end of the metapaths.  If a
+            list, can be IDs or indicies corresponding to a subset of ending nodes for the DWPC.
+        :param verbose: boolean, if True, prints debugging text for calculating each DWPC. (not optimized for 
+            parallel processing).
+        :param n_jobs: int, the number of jobs to use for parallel processing.
+
+        :return: pandas.DataFrame, Table of results with columns corresponding to DWPC values from start_id to 
+            end_id for each metapath.
+        """
+
+        # If not given a list of metapaths, calculate for all
+        if not metapaths:
+            metapaths = sorted(list(self.metapaths.keys()))
+
+        # Validate the ids before running the calculation
+        self.validate_ids(start_nodes)
+        self.validate_ids(end_nodes)
+
+        print('Calculating Path Counts...')
+        time.sleep(0.5)
+
+        # Prepare functions for parallel processing
+        arguments = []
+        for mp in metapaths:
+            path = mt.get_path(mp, self.metapaths)
+            to_multiply = mt.get_matrices_to_multiply(path, self.adj_matrices)
+            edges = mt.get_edge_names(mp, self.metapaths)
+            arguments.append({'path': path, 'edges': edges, 'to_multiply': to_multiply, 'verbose': verbose})
+
+        # Run DPWC calculation processes in parallel
+        result = parallel_process(array=arguments, function=mt.count_paths, use_kwargs=True,
+                                  n_jobs=n_jobs, front_num=0)
+        del(arguments)
+
+        # Process and return results
+        results = self.process_extraction_results(result, metapaths, start_nodes, end_nodes)
+        return results
+
+    def extract_path_count(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=False, n_jobs=1):
+        """
+        Extracts path counts metrics for the given metapaths.  If no metapaths are given, will calcualte for all metapaths.
+
+        :param metapaths: list or None, the metapaths paths to calculate DWPC values for.  List must be a subset of
+            those found in metapahts.json.  If None, will calcualte DWPC values for metapaths in the metapaths.json
+            file.
+        :param start_nodes: String or list, String title of the metanode start of the metapaths.
+            If a list, can be IDs or indicies corresponding to a subset of starting nodes for the DWPC.
+        :param end_nodes: String or list, String title of the metanode for the end of the metapaths.  If a
+            list, can be IDs or indicies corresponding to a subset of ending nodes for the DWPC.
+        :param verbose: boolean, if True, prints debugging text for calculating each DWPC. (not optimized for 
+            parallel processing).
+        :param n_jobs: int, the number of jobs to use for parallel processing.
+
+        :return: pandas.DataFrame, Table of results with columns corresponding to DWPC values from start_id to 
+            end_id for each metapath.
+        """
+
+        # If not given a list of metapaths, calculate for all
+        if not metapaths:
+            metapaths = sorted(list(self.metapaths.keys()))
+
+        # Validate the ids before running the calculation
+        self.validate_ids(start_nodes)
+        self.validate_ids(end_nodes)
+
+        print('Calculating Path Counts...')
+        time.sleep(0.5)
+
+        # Prepare functions for parallel processing
+        arguments = []
+        for mp in metapaths:
+            path = mt.get_path(mp, self.metapaths)
+            to_multiply = mt.get_matrices_to_multiply(path, self.adj_matrices)
+            edges = mt.get_edge_names(mp, self.metapaths)
+            arguments.append({'path': path, 'edges': edges, 'to_multiply': to_multiply, 'verbose': verbose})
+
+        # Run DPWC calculation processes in parallel
+        result = parallel_process(array=arguments, function=mt.count_paths, use_kwargs=True,
+                                  n_jobs=n_jobs, front_num=0)
+        del(arguments)
+
+        # Process and return results
+        results = self.process_extraction_results(result, metapaths, start_nodes, end_nodes)
+        return results
 
     def extract_degrees(self, start_nodes=None, end_nodes=None, subset=None):
         """
@@ -495,9 +588,9 @@ class MatrixFormattedGraph(object):
 
         # Extract the source and target information from the metagraph
         mg_edge = self.metagraph.metapath_from_abbrev(edge).edges[0]
-        if not start_nodes:
+        if start_nodes is None:
             start_nodes = mg_edge.source.get_id()
-        if not end_nodes:
+        if end_nodes is None:
             end_nodes = mg_edge.target.get_id()
 
         # Get degrees across edge, which are needed for this computation
@@ -535,7 +628,7 @@ class MatrixFormattedGraph(object):
     def contains_self_referential(self, edges):
         return sum([self.is_self_referential(e) for e in edges]) > 0
 
-    def duplcated_edge_source_or_target_edge(self, edges):
+    def duplicated_edge_source_or_target(self, edges):
         prev_edge = ['', '', '']
         for edge in edges:
             split_str = gt.determine_split_string(edge)
@@ -587,7 +680,7 @@ class MatrixFormattedGraph(object):
             # Remove those with a self-reverntal edge, travel across the same edge, and a target:
             elif self.contains_self_referential(info['edges']) \
                     and contains_target(info['standard_edge_abbreviations']) \
-                    and self.duplcated_edge_source_or_target_edge(info['edges']):
+                    and self.duplicated_edge_source_or_target(info['edges']):
                 blacklist.append('dwpc_' + mp)
 
         return blacklist
