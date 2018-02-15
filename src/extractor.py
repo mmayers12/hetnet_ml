@@ -23,22 +23,22 @@ class MatrixFormattedGraph(object):
         Initializes the adjacency matrices used for feature extraction.
 
         :param nodes: DataFrame or string, location of the .csv file containing nodes formatted for neo4j import.
-            This format must include two required columns: One column labeled ':ID' with the unique id for each 
+            This format must include two required columns: One column labeled ':ID' with the unique id for each
             node, and one column named ':LABEL' containing the metanode type for each node
         :param edges: DataFrame or string, location of the .csv file containing edges formatted for neo4j import.
             This format must include three required columns: One column labeled  ':START_ID' with the node id
             for the start of the edge, one labeled ':END_ID' with teh node id for the end of the edge and one
             labeled ':TYPE' describing the metaedge type.
-        :param start_kind: string, the source metanode. The node type from which the target edge to be predicted 
+        :param start_kind: string, the source metanode. The node type from which the target edge to be predicted
             as well as all metapaths originate.
-        :param end_kind: string, the target metanode. The node type to which the target edge to be predicted 
+        :param end_kind: string, the target metanode. The node type to which the target edge to be predicted
             as well as all metapaths terminate.
         :param max_length: int, the maximum length of metapaths to be extracted by this feature extractor.
         :param metapaths_file: string, location of the metapaths.json file that contains information on all the
             metapaths to be extracted.  If provided, this will be used to generate metapath information and
-            the variables `start_kind`, `end_kind` and `max_length` will be ignored.  
-            This file must contain the following keys: 'edge_abbreviations' and 'standard_edge_abbreviations' which 
-            matches the same format as ':TYPE' in the edges, 'edges' lists of each edge in the metapath. 
+            the variables `start_kind`, `end_kind` and `max_length` will be ignored.
+            This file must contain the following keys: 'edge_abbreviations' and 'standard_edge_abbreviations' which
+            matches the same format as ':TYPE' in the edges, 'edges' lists of each edge in the metapath.
         :param w: float between 0 and 1. Dampening factor for producing degree-weighted matrices
         """
         # Store the values of the different files
@@ -138,7 +138,7 @@ class MatrixFormattedGraph(object):
         if not self.metagraph:
             self.get_metagraph()
 
-        metapaths = self.metagraph.extract_metapaths(start_kind, end_kind, max_length) 
+        metapaths = self.metagraph.extract_metapaths(start_kind, end_kind, max_length)
 
         self.metapaths = dict()
         for mp in metapaths:
@@ -273,7 +273,7 @@ class MatrixFormattedGraph(object):
         :param end_nodes: string or list, String title of the metanode of the nodes for the start of the metapaths.
             If a list, can be IDs or indicies corresponding to a subset of starting nodes for the feature.
 
-        :return: pandas.DataFrame, with columns for start_node_id, end_node_id and columns for each of the metapath 
+        :return: pandas.DataFrame, with columns for start_node_id, end_node_id and columns for each of the metapath
             features calculated.
         """
         from itertools import product
@@ -315,11 +315,11 @@ class MatrixFormattedGraph(object):
             If a list, can be IDs or indicies corresponding to a subset of starting nodes for the DWPC.
         :param end_nodes: String or list, String title of the metanode for the end of the metapaths.  If a
             list, can be IDs or indicies corresponding to a subset of ending nodes for the DWPC.
-        :param verbose: boolean, if True, prints debugging text for calculating each DWPC. (not optimized for 
+        :param verbose: boolean, if True, prints debugging text for calculating each DWPC. (not optimized for
             parallel processing).
         :param n_jobs: int, the number of jobs to use for parallel processing.
 
-        :return: pandas.DataFrame, Table of results with columns corresponding to DWPC values from start_id to 
+        :return: pandas.DataFrame, Table of results with columns corresponding to DWPC values from start_id to
             end_id for each metapath.
         """
 
@@ -343,7 +343,7 @@ class MatrixFormattedGraph(object):
             arguments.append({'path': path, 'edges': edges, 'to_multiply': to_multiply, 'verbose': verbose})
 
         # Run DPWC calculation processes in parallel
-        result = parallel_process(array=arguments, function=mt.count_paths, use_kwargs=True, 
+        result = parallel_process(array=arguments, function=mt.count_paths, use_kwargs=True,
                                   n_jobs=n_jobs, front_num=0)
         del(arguments)
 
@@ -356,7 +356,7 @@ class MatrixFormattedGraph(object):
         Extracts DWWC metrics for the given metapaths.  If no metapaths are given, will calcualte for all metapaths.
 
         :param metapaths: list or None, the metapaths paths to calculate DWPC values for.  List must be a subset of
-            those found in metapahts.json.  If None, will calcualte DWPC values for all metapaths in the 
+            those found in metapahts.json.  If None, will calcualte DWPC values for all metapaths in the
             metapaths.json file.
         :param start_nodes: String or list, String title of the metanode for the start of the metapaths.
             If a list, can be IDs or indicies corresponding to a subset of starting nodes for the DWWC.
@@ -364,7 +364,7 @@ class MatrixFormattedGraph(object):
             list, can be IDs or indicies corresponding to a subset of ending nodes for the DWWC.
         :param n_jobs: int, the number of jobs to use for parallel processing.
 
-        :return: pandas.DataFrame. Table of results with columns corresponding to DWPC values from start_id to 
+        :return: pandas.DataFrame. Table of results with columns corresponding to DWPC values from start_id to
             end_id for each metapath.
         """
 
@@ -388,7 +388,7 @@ class MatrixFormattedGraph(object):
             to_multiply = mt.get_matrices_to_multiply(path, self.degree_weighted_matrices)
             arguments.append({'path': path, 'to_multiply': to_multiply})
         # Run DWWC calculation processes in parallel
-        result = parallel_process(array=arguments, function=mt.count_walks, use_kwargs=True, 
+        result = parallel_process(array=arguments, function=mt.count_walks, use_kwargs=True,
                                   n_jobs=n_jobs, front_num=0)
 
         # process and resturn results
@@ -397,7 +397,7 @@ class MatrixFormattedGraph(object):
 
     def extract_path_count(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=False, n_jobs=1):
         """
-        Extracts path counts metrics for the given metapaths.  If no metapaths are given, will calcualte for all metapaths.
+        Extracts path counts for the given metapaths.  If no metapaths are given, will calcualte for all metapaths.
 
         :param metapaths: list or None, the metapaths paths to calculate DWPC values for.  List must be a subset of
             those found in metapahts.json.  If None, will calcualte DWPC values for metapaths in the metapaths.json
@@ -406,11 +406,11 @@ class MatrixFormattedGraph(object):
             If a list, can be IDs or indicies corresponding to a subset of starting nodes for the DWPC.
         :param end_nodes: String or list, String title of the metanode for the end of the metapaths.  If a
             list, can be IDs or indicies corresponding to a subset of ending nodes for the DWPC.
-        :param verbose: boolean, if True, prints debugging text for calculating each DWPC. (not optimized for 
+        :param verbose: boolean, if True, prints debugging text for calculating each DWPC. (not optimized for
             parallel processing).
         :param n_jobs: int, the number of jobs to use for parallel processing.
 
-        :return: pandas.DataFrame, Table of results with columns corresponding to DWPC values from start_id to 
+        :return: pandas.DataFrame, Table of results with columns corresponding to DWPC values from start_id to
             end_id for each metapath.
         """
 
@@ -433,54 +433,7 @@ class MatrixFormattedGraph(object):
             edges = mt.get_edge_names(mp, self.metapaths)
             arguments.append({'path': path, 'edges': edges, 'to_multiply': to_multiply, 'verbose': verbose})
 
-        # Run DPWC calculation processes in parallel
-        result = parallel_process(array=arguments, function=mt.count_paths, use_kwargs=True,
-                                  n_jobs=n_jobs, front_num=0)
-        del(arguments)
-
-        # Process and return results
-        results = self.process_extraction_results(result, metapaths, start_nodes, end_nodes)
-        return results
-
-    def extract_path_count(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=False, n_jobs=1):
-        """
-        Extracts path counts metrics for the given metapaths.  If no metapaths are given, will calcualte for all metapaths.
-
-        :param metapaths: list or None, the metapaths paths to calculate DWPC values for.  List must be a subset of
-            those found in metapahts.json.  If None, will calcualte DWPC values for metapaths in the metapaths.json
-            file.
-        :param start_nodes: String or list, String title of the metanode start of the metapaths.
-            If a list, can be IDs or indicies corresponding to a subset of starting nodes for the DWPC.
-        :param end_nodes: String or list, String title of the metanode for the end of the metapaths.  If a
-            list, can be IDs or indicies corresponding to a subset of ending nodes for the DWPC.
-        :param verbose: boolean, if True, prints debugging text for calculating each DWPC. (not optimized for 
-            parallel processing).
-        :param n_jobs: int, the number of jobs to use for parallel processing.
-
-        :return: pandas.DataFrame, Table of results with columns corresponding to DWPC values from start_id to 
-            end_id for each metapath.
-        """
-
-        # If not given a list of metapaths, calculate for all
-        if not metapaths:
-            metapaths = sorted(list(self.metapaths.keys()))
-
-        # Validate the ids before running the calculation
-        self.validate_ids(start_nodes)
-        self.validate_ids(end_nodes)
-
-        print('Calculating Path Counts...')
-        time.sleep(0.5)
-
-        # Prepare functions for parallel processing
-        arguments = []
-        for mp in metapaths:
-            path = mt.get_path(mp, self.metapaths)
-            to_multiply = mt.get_matrices_to_multiply(path, self.adj_matrices)
-            edges = mt.get_edge_names(mp, self.metapaths)
-            arguments.append({'path': path, 'edges': edges, 'to_multiply': to_multiply, 'verbose': verbose})
-
-        # Run DPWC calculation processes in parallel
+        # Run PC calculation processes in parallel
         result = parallel_process(array=arguments, function=mt.count_paths, use_kwargs=True,
                                   n_jobs=n_jobs, front_num=0)
         del(arguments)
@@ -557,7 +510,7 @@ class MatrixFormattedGraph(object):
         Estimates the prior probability that a target edge exists between a given source and target node pair.
         Prior probability is dependant on the degrees of the nodes across the given edge.
         Further discussion here: https://think-lab.github.io/d/201/
-        
+
         :param edge: string, the abbreviation of the metaedge across which the prior probability will be extracted.
             e.g. 'CtD' for the Compound-treats-Disease edge.
         :return: pandas.DataFrame, with all combinations of instances of the Start and End metanodes for the edge,
@@ -572,7 +525,7 @@ class MatrixFormattedGraph(object):
             compound A has 3 compound-treats-disease edges
             disease Z has 5 compound-treats-diease edges
 
-            Prob that compound A treats disease Z = 
+            Prob that compound A treats disease Z =
                 1 - (750/755 * 749/754 * 748/753)
             """
 
