@@ -1,10 +1,7 @@
-import bz2
 import numpy as np
 import pandas as pd
 
-from tqdm import tqdm
-from scipy.special import logit
-from scipy.sparse import diags, eye
+from scipy.sparse import diags, eye, csc_matrix, csr_matrix
 from collections import defaultdict
 from itertools import combinations, chain
 
@@ -39,7 +36,10 @@ def get_path(metapath, metapaths):
 
 def get_edge_names(metapath, metapaths):
     """Gets the list of edge names from a metapath abbreviation
-    :param metapaths:
+    :param metapath: String, the abbreviation for the metapath e.g. 'CbGaD'
+    :param metapaths: dict, with keys metapaths, and values dicts containing metapath information including
+        edge_abbreviations and standard_edge_abbreviations.
+    :return: list, the full names of each of the edges in the metapath
     """
     return metapaths[metapath]['edges']
 
@@ -55,85 +55,92 @@ def get_reverse_directed_edge(orig):
     # Split at the character '>'
     # Everything after '>' will remain the same
     orig_spl = orig.split('>')
+    backward = False
+    if len(orig_spl) == 1:
+        orig_spl = orig.split('<')
+        backward = True
 
-    # The metanode is in upper(), whereas the metaedge is in lower()
-    # Use this to find the correct indices regarding the node and edge
-    orig1 = orig_spl[0].lower()
-    orig2 = orig_spl[0].upper()
+    if not backward:
+        # The metanode is in upper(), whereas the metaedge is in lower()
+        # Use this to find the correct indices regarding the node and edge
+        orig1 = orig_spl[0].lower()
+        orig2 = orig_spl[0].upper()
 
-    start_node = []
-    edge = []
+        start_node = []
+        edge = []
 
-    # Add indices for the start node name (orig != orig.lower())
-    for i, (l0, l1) in enumerate(zip(orig_spl[0], orig1)):
-        if l0 != l1:
-            start_node.append(i)
+        # Add indices for the start node name (orig != orig.lower())
+        for i, (l0, l1) in enumerate(zip(orig_spl[0], orig1)):
+            if l0 != l1:
+                start_node.append(i)
 
-    # Add indices for the edge abbreviation (orig != orig.upper())
-    for i, (l0, l2) in enumerate(zip(orig_spl[0], orig2)):
-        if l0 != l2:
-            edge.append(i)
+        # Add indices for the edge abbreviation (orig != orig.upper())
+        for i, (l0, l2) in enumerate(zip(orig_spl[0], orig2)):
+            if l0 != l2:
+                edge.append(i)
 
-    # This is some ugly code... It puts the end node in the start position,
-    # Adds a '<' then the edge abbreviation,
-    # then grabs the start node abbreviation by indices and puts it in the end position.
-    return orig_spl[1] + '<' + orig[edge[0]: edge[-1]+1] + orig[start_node[0]: start_node[-1]+1]  
+        # This is some ugly code... It puts the end node in the start position,
+        # Adds a '<' then the edge abbreviation,
+        # then grabs the start node abbreviation by indices and puts it in the end position.
+        return orig_spl[1] + '<' + orig[edge[0]: edge[-1] + 1] + orig[start_node[0]: start_node[-1] + 1]
+    else:
+        # The metanode is in upper(), whereas the metaedge is in lower()
+        # Use this to find the correct indices regarding the node and edge
+        orig1 = orig_spl[1].lower()
+        orig2 = orig_spl[1].upper()
+
+        start_node = []
+        edge = []
+
+        # Add indices for the start node name (orig != orig.lower())
+        for i, (l0, l1) in enumerate(zip(orig_spl[1], orig1)):
+            if l0 != l1:
+                start_node.append(len(orig_spl[0]) + 1 + i)
+
+        # Add indices for the edge abbreviation (orig != orig.upper())
+        for i, (l0, l2) in enumerate(zip(orig_spl[1], orig2)):
+            if l0 != l2:
+                edge.append(len(orig_spl[0]) + 1 + i)
+
+        # This is some ugly code... It puts the end node in the start position,
+        # Adds a '<' then the edge abbreviation,
+        # then grabs the start node abbreviation by indices and puts it in the end position.
+        return orig[start_node[0]: start_node[-1] + 1] + orig[edge[0]: edge[-1] + 1] + '>' + orig_spl[0]
 
 
-def weight_by_degree(matrix, w=0.4, directed=False):
+def weight_by_degree(matrix, w=0.4):
     """
     Weights an adjacency matrix by node degree.
 
     :param matrix: The sparse matrix to be weighted
     :param w: Dampening factor for weighting the edges. 0 < w <= 1  Default = 0.4
-    :param directed: Boolean, for directed edges. If True, calculates in-degree and out-degree separated.
 
     :return: Sparse Adjacency Matrix, weighted by degree
     """
 
-    # Get the degree of each item
-    if directed:
-        # In and out degrees are different in directed edges
-        out_degree = matrix.sum(axis=1)
-        out_degree = np.array(np.reshape(out_degree, len(out_degree)))[0]
-        in_degree = np.array(matrix.sum(axis=0))[0]
+    degree_fwd = (matrix * matrix.T).diagonal()
+    degree_rev = (matrix.T * matrix).diagonal()
 
-        # set 0s to 1 for negative exponents to work
-        in_degree[np.where(in_degree == 0)] = 1
-        out_degree[np.where(out_degree == 0)] = 1
+    # set 0s to 1s
+    degree_fwd[np.where(degree_fwd == 0)] = 1
+    degree_rev[np.where(degree_rev == 0)] = 1
 
-        # weight degrees
-        weighted_in = in_degree ** (-1*w)
-        weighted_out = out_degree ** (-1*w)
+    # Weight each degree
+    weighted_degree_fwd = degree_fwd ** (-1 * w)
+    weighted_degree_rev = degree_rev ** (-1 * w)
 
-        # Rows * out_degree
-        # Cols * in_degree
-        matrix_out = matrix.multiply(weighted_in).transpose()
-        matrix_out = matrix_out.multiply(weighted_out).transpose()
+    matrix_out = matrix.T.multiply(weighted_degree_fwd)
+    matrix_out = matrix_out.T.multiply(weighted_degree_rev)
 
-    else:
-        degree = (matrix*matrix).diagonal()
-
-        # set 0s to 1s
-        degree[np.where(degree == 0)] = 1
-
-        # Weight each degree
-        weighted_degree = degree ** (-1*w)
-
-        matrix_out = matrix.multiply(weighted_degree).transpose()
-        matrix_out = matrix_out.multiply(weighted_degree)   # symmetric matrix, so second transpose unneeded
-
-    # Return weighted edges
     return matrix_out.astype('float32').tocsc()
 
 
-def count_walks(path, to_multiply):
+def count_walks(to_multiply):
     """
     Calculates either WC or DWWC depending on wither an adj. or weighted matrix is passed. Walks essentially
     allow repeated visits to the same node, whereas paths do not.
 
-    :param path: list, the abbreviations for each metaedge of the metapath to be followed.
-    :param matrices: The dictionary of sparse matrices to be used to calculate.  If a simple adjacency matrix,
+    :param to_multiply: The list of sparse matrices to be used to calculate.  If a simple adjacency matrix,
         will give Walk Count, but if a matrices are weighted by degree will give Degree Weighted Walk Count
 
     :return: The matrix giving the number of walks, where matrix[i, j], the ith node is the starting node and the
@@ -174,7 +181,7 @@ def find_repeated_node_indices(edge_names):
     for node_type, indices in node_order.items():
         index_pairs = []
         for i in range(len(indices) - 1):
-            index_pairs.append([indices[i], indices[i+1]])
+            index_pairs.append([indices[i], indices[i + 1]])
         node_order[node_type] = index_pairs
 
     return node_order
@@ -194,10 +201,12 @@ def multiply_removing_diagonal(matrices, only_repeat_paths=False):
 
     # Count all the walks along the metapath
     rough_count = np.prod(matrices)
+
     # Find those which start and end on the same node
     repeats = diags(rough_count.diagonal())
     if only_repeat_paths:
         return repeats
+
     # Remove the repeated walks to count only the paths
     return rough_count - repeats
 
@@ -244,7 +253,7 @@ def count_removing_repeats(repeat_indices, matrices):
     """
 
     # Get the matrix size in case identity to_multiply need to be made
-    size = matrices[0].shape[0]
+    size = matrices[0].shape[1]
     to_multiply = matrices[:]
 
     # Multiply in the order of the indices
@@ -271,14 +280,15 @@ def count_removing_repeats(repeat_indices, matrices):
             end = np.max(indices)
 
             # Remove the identity matrices and multiply from start to end of the same typed nodes
-            inner_product = [m for m in to_multiply[start: end] if (m != eye(size)).sum()]
+            inner_product = [m for m in to_multiply[start: end] if
+                             m.shape[0] != size or m.shape[1] != size or (m != eye(size)).sum()]
             inner_product = count_between_identical_metanodes(inner_product)
             to_multiply[start] = inner_product
             for i in range(start + 1, end):
                 to_multiply[i] = eye(size)
 
     # Remove identity matrices from list before final multiplication
-    to_multiply = [m for m in to_multiply if (m != eye(size)).sum()]
+    to_multiply = [m for m in to_multiply if m.shape[0] != size or m.shape[1] != size or (m != eye(size)).sum()]
 
     return np.prod(to_multiply)
 
@@ -379,7 +389,7 @@ def interpolate_overcounting(extra_counts):
     return (get_elementwise_max(extra_counts) + sum(extra_counts)) / 2
 
 
-def estimate_count_from_repeats(path, edges, to_multiply, resolving_function=interpolate_overcounting):
+def estimate_count_from_repeats(edges, to_multiply, resolving_function=interpolate_overcounting):
     """
     Estimates the Path-Count based on the differnece between the Walk-Count and the Path-Count removing
     repated nodes for each metanode type individually.
@@ -388,9 +398,8 @@ def estimate_count_from_repeats(path, edges, to_multiply, resolving_function=int
     resolving_function to estimate the overcounting via walks.  If this value ends up being greater
     than the total walk-count, the Path-Count is set to zero.
 
-    :param path: list, the standard edge abbreviations that make up the metapath
     :param edges: list, the edge names that make up the metapath
-    :param matrices: Dictionary of the matrices to use for calculation
+    :param to_multiply: List of the matrices to use for calculation
         (e.g. degree weighted or standard adjacency)
     :param resolving_function: function to determine the error.  Default: sum()
     """
@@ -444,7 +453,7 @@ def calc_abab(mats, return_steps=False):
     overcount1 = diag1 * mats[2]
     overcount2 = mats[0] * diag2
 
-    doubly_removed = mats[0].multiply(mats[1].multiply(mats[2]))
+    doubly_removed = mats[0].multiply(mats[1].T.multiply(mats[2]))
 
     result = np.prod(mats) - overcount1 - overcount2 + doubly_removed
 
@@ -540,15 +549,118 @@ def abab_3(repeat_indices, to_multiply):
     return result
 
 
-def get_matrices_to_multiply(path, matrices):
+def expand_matrix(matrix, size, start_idxs=None, end_idxs=None):
     """
-    Returns the matrices that need to be multiplied in the given path
+    Expands a matrix a sub-setted square adjcency matrix on start_idxs and/or end_idxs, back to a square shape.
+
+    :param matrix: scipy.sparse matrix that has been subsetted 
+    :param size: int, the original size of the matrix
+    :param start_idxs: list, the row indices that the original matrix was sub-setted on
+    :param end_idxs: list, the column indices that the original mtrix was sub-setted on
+
+    :return: scipy.sparse.csc_matrix, size x size in dimension. 
     """
-    return [matrices[edge] for edge in path]
+
+    def h_expand(in_mat, idxs):
+
+        # Create the square output matrix.
+        out_mat = np.zeros((1, size))[0]
+        out_mat = diags(out_mat).tolil()
+
+        # Subset the number of rows if the in matrix isn't already fully expanded on rows.
+        if in_mat.shape[0] < size:
+            out_mat = out_mat[:in_mat.shape[0], :]
+
+        # Copy the input matrix values to the correct rows
+        for i, idx in enumerate(idxs):
+            out_mat[:, idx] = in_mat[:, i]
+        return out_mat
+
+    out_matrix = matrix
+    # Loop allows for expansion of matrices sub-setted both on start and end indices
+    while out_matrix.shape[0] < size or out_matrix.shape[1] < size:
+
+        # Do a vertical expand (rows) if needed
+        if start_idxs is not None and out_matrix.shape[0] < size:
+            out_matrix = h_expand(out_matrix.tocsr().T, start_idxs).T
+        # Do a horizontal expansion (columns) if needed
+        if end_idxs is not None and out_matrix.shape[1] < size:
+            out_matrix = h_expand(out_matrix, end_idxs)
+
+    return out_matrix.tocsc()
 
 
-def count_paths(path, edges, to_multiply, verbose=False, uncountable_estimate_func=estimate_count_from_repeats,
-                uncountable_params=None):
+def csr_row_set_nz_to_val(csr, row, value=0):
+    """Set all nonzero elements (elements currently in the sparsity pattern)
+    to the given value. Useful to set to 0 mostly.
+    """
+    if not isinstance(csr, csr_matrix):
+        raise ValueError('Matrix given must be of CSR format.')
+    csr.data[csr.indptr[row]:csr.indptr[row + 1]] = value
+
+
+def csr_rows_set_nz_to_val(csr, rows, value=0):
+    for row in rows:
+        csr_row_set_nz_to_val(csr, row)
+    if value == 0:
+        csr.eliminate_zeros()
+
+
+def get_matrices_to_multiply(metapath, metapaths, matrices, mats_subset_start=None, mats_subset_end=None):
+    """
+    Finds the correct abbreviations and order for the metaedges in a metapath.
+
+    :param metapath: String, the abbreviation for the metapath e.g. 'CbGaD'
+    :param metapaths: dict, with keys metapaths, and values dicts containing metapath information including
+        edge_abbreviations and standard_edge_abbreviations.
+    :param matrices: dictionary of matrices from which to generate the path
+    :param mats_subset_start: dictionary of matrices from which to generate the path, only to be used for the first
+        step in a metapath if and only if some of the starting nodes are not being extracted.
+    :param mats_subset_end: dictionary of matrices from which to generate the path, only to be used for the final
+        step in a metapath if and only if some of the ending nodes are not being extracted.
+    :return: list, the matrices to be multiplied in the path.
+    """
+    edge_abbrevs = metapaths[metapath]['edge_abbreviations']
+    std_edge_abbrevs = metapaths[metapath]['standard_edge_abbreviations']
+
+    # Determine which matrices need to be transposed
+    transpose = []
+    for ea, std_ea in zip(edge_abbrevs, std_edge_abbrevs):
+        if ea != std_ea:
+            if '>' not in std_ea:
+                transpose.append(True)
+            else:
+                transpose.append(False)
+        else:
+            transpose.append(False)
+
+    # Select the matrices to be multiplied and transpose if necessary
+    to_multiply = []
+    for i, (ea, std_ea, trans) in enumerate(zip(edge_abbrevs, std_edge_abbrevs, transpose)):
+        # Use sub-setted start matrices on first iteration
+        if i == 0 and mats_subset_start is not None:
+            mats = mats_subset_start
+        # Use sub-setted end matrices on last iteration
+        elif i == len(edge_abbrevs) - 1 and mats_subset_end is not None:
+            mats = mats_subset_end
+        else:
+            mats = matrices
+
+        # Select the correct matrix with correct transpose state for path
+        if '>' in ea or ('<' in ea and ea in mats.keys()):
+            to_multiply.append(mats[ea])
+        elif '<' in ea:
+            to_multiply.append(mats[get_reverse_directed_edge(ea)].T)
+        elif trans:
+            to_multiply.append(mats[std_ea].T)
+        else:
+            to_multiply.append(mats[std_ea])
+
+    return to_multiply
+
+
+def count_paths(edges, to_multiply, start_idxs=None, end_idxs=None, verbose=False,
+                uncountable_estimate_func=estimate_count_from_repeats, uncountable_params=None):
     """
     Counts paths removing repeats due to only one repeated metanode in the metapath.
 
@@ -557,10 +669,11 @@ def count_paths(path, edges, to_multiply, verbose=False, uncountable_estimate_fu
     in list order, identified as being repeated. A flag to default to the metanode type with the most repeats
     can be used if no given types are found.
 
-    :param path: String representation of metapath to count paths for
     :param edges: Dictionary with information on each metapath
-    :param matrices: Dictionary of the matrices to use for calculation
+    :param to_multiply: list of matrices to multiply for the calculation
         (e.g. degree weighted or standard adjacency)
+    :param start_idxs: list of ints, the indices of the starting nodes in the original square matrix
+    :param end_idxs: list of ints, the indices of the ending nodes in the original square matrix
     :param verbose: boolean, if True, prints results of decision tree logic.
     :param uncountable_estimate_func: Function to determine the path count when matrix multiplication cannot return
         an exact answer. Must be a function `metapath` and `matricies`. Any other parameters can be passed by
@@ -571,7 +684,11 @@ def count_paths(path, edges, to_multiply, verbose=False, uncountable_estimate_fu
     :return: Sparse Matrix, containing path counts along the metapath.
     """
 
-    size = to_multiply[0].shape[0]
+    if start_idxs is None:
+        start_idxs = np.arange(to_multiply[0].shape[0])
+    if end_idxs is None:
+        end_idxs = np.arange(to_multiply[-1].shape[1])
+
     repeated_nodes = find_repeated_node_indices(edges)
 
     # uncountable params must be a dict.
@@ -582,24 +699,26 @@ def count_paths(path, edges, to_multiply, verbose=False, uncountable_estimate_fu
     if not repeated_nodes:
         if verbose:
             print('No repeats')
-        return np.prod(to_multiply)
+        return np.prod(to_multiply)[start_idxs, :][:, end_idxs]
 
     # Only 1 metanode type is repeated, so easy to get exact answer
     elif len(repeated_nodes) == 1:
         if verbose:
-            print('1 repeat')
+            print('1 repeat...', end=' ')
         repeat_indices = list(repeated_nodes.values())
         if len(repeat_indices[0]) > 2:
             if verbose:
-                print('4 Visits, Estimating')
-                return uncountable_estimate_func(path, edges, to_multiply, **uncountable_params)
+                print('4 Visits... Estimating')
+                return uncountable_estimate_func(edges, to_multiply, **uncountable_params)[start_idxs, :][:, end_idxs]
 
-        return count_removing_repeats(repeat_indices, to_multiply)
+        if verbose:
+            print('Countable')
+        return count_removing_repeats(repeat_indices, to_multiply)[start_idxs, :][:, end_idxs]
 
     # 2 repeated metanode types, Fast to determine if exact answer is determinable
     elif len(repeated_nodes) == 2:
         if verbose:
-            print('2 repeats')
+            print('2 repeats...', end=' ')
 
         repeats = sorted(list(repeated_nodes.values()))
 
@@ -609,31 +728,32 @@ def count_paths(path, edges, to_multiply, verbose=False, uncountable_estimate_fu
             # if Countable, repeats that start second will always come before those
             # that start first.
             repeat_indices = sorted(repeats, reverse=True)
-            return count_removing_repeats(repeat_indices, to_multiply)
+            return count_removing_repeats(repeat_indices, to_multiply)[start_idxs, :][:, end_idxs]
 
         else:
             if verbose:
-                print('trying new ABAB logic')
+                print('trying new ABAB logic...', end=' ')
 
             result = determine_abab_kind(repeats, to_multiply)
             if result is not None:
-                return result
+                if verbose:
+                    print('Success')
+                return result[start_idxs, :][:, end_idxs]
 
             else:
-
                 if verbose:
                     print('Estimating')
-                return uncountable_estimate_func(path, edges, to_multiply, **uncountable_params)
+                return uncountable_estimate_func(edges, to_multiply, **uncountable_params)[start_idxs, :][:, end_idxs]
 
     elif len(repeated_nodes) > 2:
-        print('Not yet implemented', path)
+        print('Not yet implemented', edges)
         print('Returning Zeroes')
-        return diags([0] * size)
+        return csc_matrix(np.zeros((len(start_idxs), len(end_idxs))))
 
     else:
-        print("Unknown error, Something went wrong.....", path)
+        print("Unknown error, Something went wrong.....", edges)
         print("Returning Zeroes")
-        return diags([0] * size)
+        return csc_matrix(np.zeros((len(start_idxs), len(end_idxs))))
 
 
 def to_series(result, start_ids=None, end_ids=None, name=None):
