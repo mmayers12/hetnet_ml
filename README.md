@@ -21,11 +21,11 @@ subject to change
 
 ## Usage
 
-See demo folder for further in-depth explanation of features
+See demo folder for further in-depth and up-to-date explanation of features
 
     In [1]: from extractor import MatrixFormattedGraph
 
-    In [2]: mg = MatrixFormattedGraph('nodes.csv', 'edges.csv', 'metapaths.json')
+    In [2]: mg = MatrixFormattedGraph('nodes.csv', 'edges.csv', start_kind='Compound', end_kind='Disease')
     Reading file information...
     Generating adjcency matrices...
     100%|███████████████████████████████████████████████████████████████| 24/24 [01:02<00:00,  6.11s/it]
