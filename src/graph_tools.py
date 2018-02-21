@@ -35,14 +35,16 @@ def get_abbrev_dict_and_edge_tuples(nodes, edges):
 
     Therefore, abbreviations for edge and node types can be extracted from the full edge name.
     """
+    nodes = remove_colons(nodes)
+    edges = remove_colons(edges)
 
-    id_to_kind = nodes.set_index(':ID')[':LABEL'].to_dict()
+    id_to_kind = nodes.set_index('id')['label'].to_dict()
 
-    node_kinds = nodes[':LABEL'].unique()
-    edge_kinds = edges[':TYPE'].unique()
+    node_kinds = nodes['label'].unique()
+    edge_kinds = edges['type'].unique()
 
     # If we have a lot of edges, lets reduce to one of each type for faster queries later.
-    edge_kinds_df = edges.drop_duplicates(subset=[':TYPE'])
+    edge_kinds_df = edges.drop_duplicates(subset=['type'])
 
     # Extract just the abbreviation portion
     edge_abbrevs = [e.split('_')[-1] for e in edge_kinds]
@@ -83,9 +85,9 @@ def get_abbrev_dict_and_edge_tuples(nodes, edges):
         edge_abbrev_dict[edge_name] = edge_abbrev
 
         # Have abbreviations, but need to get corresponding types for start and end nodes
-        edge = edge_kinds_df[edge_kinds_df[':TYPE'] == kind].iloc[0]
-        start_kind = id_to_kind[edge[':START_ID']]
-        end_kind = id_to_kind[edge[':END_ID']]
+        edge = edge_kinds_df.query('type == @kind').iloc[0]
+        start_kind = id_to_kind[edge['start_id']]
+        end_kind = id_to_kind[edge['end_id']]
 
         node_abbrev_dict[start_kind] = start_abbrev
         node_abbrev_dict[end_kind] = end_abbrev
