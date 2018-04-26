@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from scipy.sparse import diags, eye, csc_matrix, csr_matrix
+from scipy.sparse import diags, eye, csc_matrix, csr_matrix, coo_matrix
 from collections import defaultdict
 from itertools import combinations, chain
 
@@ -754,6 +754,29 @@ def count_paths(edges, to_multiply, start_idxs=None, end_idxs=None, verbose=Fals
         print("Unknown error, Something went wrong.....", edges)
         print("Returning Zeroes")
         return csc_matrix(np.zeros((len(start_idxs), len(end_idxs))))
+
+
+def reshape(a, shape):
+    """Reshape the sparse matrix `a`.
+
+    Returns a coo_matrix with shape `shape`.
+    """
+    if not hasattr(shape, '__len__') or len(shape) != 2:
+        raise ValueError('`shape` must be a sequence of two integers')
+
+    c = a.tocoo()
+    nrows, ncols = c.shape
+    size = nrows * ncols
+
+    new_size =  shape[0] * shape[1]
+    if new_size != size:
+        raise ValueError('total size of new array must be unchanged')
+
+    flat_indices = ncols * c.row + c.col
+    new_row, new_col = divmod(flat_indices, shape[1])
+
+    b = coo_matrix((c.data, (new_row, new_col)), shape=shape)
+    return b.tocsc()
 
 
 def to_series(result, start_ids=None, end_ids=None, name=None):
