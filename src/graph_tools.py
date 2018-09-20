@@ -22,12 +22,13 @@ def get_edge_name(edge):
 
 def map_id_to_value(nodes, value):
     """Maps Node id to another value"""
-    return nodes.set_index(':ID')[value].to_dict()
+    return remove_colons(nodes).set_index('id')[value].to_dict()
 
 
 def get_abbrev_dict_and_edge_tuples(nodes, edges):
     """
     Returns an abbreviation dictionary generated from class variables.
+    Required input for metagraph functions in the hetio package.
 
     Edge types are formatted as such:
         edge-name_{START_NODE_ABBREV}{edge_abbrev}{END_NODE_ABBREV}
@@ -100,25 +101,28 @@ def get_abbrev_dict_and_edge_tuples(nodes, edges):
 
 
 def combine_nodes_and_edges(nodes, edges):
-    """Combines the nodes and edges frames into a single dataframe for simple analysis"""
+    """Combines data from nodes and edges frames into a single dataframe"""
+
+    nodes = remove_colons(nodes)
+    edges = remove_colons(edges)
 
     id_to_name = map_id_to_value(nodes, 'name')
-    id_to_label = map_id_to_value(nodes, ':LABEL')
+    id_to_label = map_id_to_value(nodes, 'label')
 
     out_df = edges.copy()
 
-    out_df['start_name'] = out_df[':START_ID'].apply(lambda i: id_to_name[i])
-    out_df['end_name'] = out_df[':END_ID'].apply(lambda i: id_to_name[i])
+    out_df['start_name'] = out_df['start_id'].apply(lambda i: id_to_name[i])
+    out_df['end_name'] = out_df['end_id'].apply(lambda i: id_to_name[i])
 
-    out_df['start_label'] = out_df[':START_ID'].apply(lambda i: id_to_label[i])
-    out_df['end_label'] = out_df[':END_ID'].apply(lambda i: id_to_label[i])
+    out_df['start_label'] = out_df['start_id'].apply(lambda i: id_to_label[i])
+    out_df['end_label'] = out_df['end_id'].apply(lambda i: id_to_label[i])
 
     return out_df
 
 
 def get_node_degrees(edges):
     """Determines the degrees for all nodes"""
-    return pd.concat([edges[':START_ID'], edges[':END_ID']]).value_counts()
+    return pd.concat([remove_colons(edges)['start_id'], remove_colons(edges)['end_id']]).value_counts()
 
 
 def add_colons(df, id_name='', col_types={}):
@@ -127,8 +131,8 @@ def add_colons(df, id_name='', col_types={}):
     User can also specify  a name for the ':ID' column and data types for property columns.
 
     :param df: DataFrame, the neo4j import data without colons in it (e.g. to make it queryable).
-    :param id_name: String, name for the id property.  If importing a CSV into neo4j without this property, Neo4j may
-        use its own internal id's losing this property.
+    :param id_name: String, name for the id property.  If importing a CSV into neo4j without this property,
+                    Neo4j mayuse its own internal id's losing this property.
     :param col_types: dict, data types for other columns in the form of column_name:data_type
     :return: DataFrame, with neo4j compatible column headings
     """
@@ -191,14 +195,14 @@ def determine_split_string(edge):
 def permute_edges(edges, directed=False, multiplier=10, excluded_edges=None, seed=0):
     """
     Permutes the edges of one metaedge in a graph while preserving the degree of each node.
-    
+
     :param edges: DataFrame, edges information
     :param directed: bool, whether or not the edge is directed
     :param multiplier: int, governs the number of permutations, multiplied by number of edges
     :param excluded_edges: DataFrame, edges to exclude from final permuted edges
     :param seed: int, random state for analysis
-    
-    :return permuted_edges, stats: DataFrame, DataFrame - the permuted start and end ids, the permutation stats. 
+
+    :return permuted_edges, stats: DataFrame, DataFrame - the permuted start and end ids, the permutation stats.
     """
     random.seed(seed)
 
@@ -317,13 +321,14 @@ def permute_edges(edges, directed=False, multiplier=10, excluded_edges=None, see
 def permute_graph(edges, multiplier=10, excluded_edges=None, seed=0):
     """
     Permutes the all of the metaedges types for those given in a graph file.
-    
-    :param edges: DataFrame, the edges to be permuted 
+
+    :param edges: DataFrame, the edges to be permuted
     :param multiplier: int, governs the number of permutations to be performed
     :param excluded_edges: DataFrame, edges to be disallowed from final permutations
     :param seed: int, random state for analysis for reproduciability
-    
-    :return permuted_graph, stats: DataFrame, DataFrame - the edges of the graph permuted, stats on the permutations.  
+
+    :return permuted_graph, stats: DataFrame, DataFrame - the edges of the graph permuted,
+                                   stats on the permutations.
     """
     # Change columns names to pandas standard
     orig_columns = edges.columns
