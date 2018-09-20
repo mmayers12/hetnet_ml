@@ -435,7 +435,7 @@ def estimate_count_from_repeats(edges, to_multiply, resolving_function=interpola
 def calc_abab(mats, return_steps=False):
     """
     Counts paths with an ABAB structure. Takes a list of 3 matrices, removes overcounts due to visiting A twice,
-    removes overcounts due to visiting B twice, then adds back in paths that were doubly removed where an A and B 
+    removes overcounts due to visiting B twice, then adds back in paths that were doubly removed where an A and B
     node were both visited twice.
 
     :param mats: list, the matrcies to be multiplied together
@@ -470,7 +470,7 @@ def get_abab_list(to_multiply, all_repeats):
     """
     Gets a list of matrices that conform to ABAB pattern. Collapses down larger patterns like ABCAB to ABAB.
 
-    :param to_multiply: list, the matrices to be multiplied to determine the path count. 
+    :param to_multiply: list, the matrices to be multiplied to determine the path count.
     :param all_repeats: list, the locations of the repeats.
 
     :return: list of len 3 that makes the ABAB pattern.
@@ -496,7 +496,7 @@ def get_abab_list(to_multiply, all_repeats):
 
 def determine_abab_kind(repeat_indices, to_multiply):
     """
-    Determines the ABAB structure in the metapath and selects the appropriate path counting method. 
+    Determines the ABAB structure in the metapath and selects the appropriate path counting method.
 
     :param repeat_indices: list, the locations where nodes are repeated in the path structure.
     :param to_multiply: list, the matrices to be multiplied together to get the path count.
@@ -553,12 +553,12 @@ def expand_matrix(matrix, size, start_idxs=None, end_idxs=None):
     """
     Expands a matrix a sub-setted square adjcency matrix on start_idxs and/or end_idxs, back to a square shape.
 
-    :param matrix: scipy.sparse matrix that has been subsetted 
+    :param matrix: scipy.sparse matrix that has been subsetted
     :param size: int, the original size of the matrix
     :param start_idxs: list, the row indices that the original matrix was sub-setted on
     :param end_idxs: list, the column indices that the original mtrix was sub-setted on
 
-    :return: scipy.sparse.csc_matrix, size x size in dimension. 
+    :return: scipy.sparse.csc_matrix, size x size in dimension.
     """
 
     def h_expand(in_mat, idxs):
@@ -754,6 +754,61 @@ def count_paths(edges, to_multiply, start_idxs=None, end_idxs=None, verbose=Fals
         print("Unknown error, Something went wrong.....", edges)
         print("Returning Zeroes")
         return csc_matrix(np.zeros((len(start_idxs), len(end_idxs))))
+
+
+def get_individual_paths(to_multiply, start_idx, end_idx, metapath):
+    out = []
+
+    if len(to_multiply) == 2:
+        result = to_multiply[0].multiply(to_multiply[1].T)
+        row_nz = result.nonzero()[0]
+        col_nz = result.nonzero()[1]
+
+        for r, c in zip(row_nz, col_nz):
+            node_idxs = []
+            node_idxs.append(start_idx)
+            node_idxs.append(c)
+            node_idxs.append(end_idx)
+
+            out.append({'node_idxs': node_idxs, 'metric': result[r, c], 'metapath': metapath})
+
+
+    elif len(to_multiply) == 3:
+        result = to_multiply[0].T.multiply(to_multiply[1]).multiply(to_multiply[2].T)
+        row_nz = result.nonzero()[0]
+        col_nz = result.nonzero()[1]
+
+        for r, c in zip(row_nz, col_nz):
+            node_idxs = []
+            node_idxs.append(start_idx)
+            node_idxs.append(r)
+            node_idxs.append(c)
+            node_idxs.append(end_idx)
+
+            out.append({'node_idxs': node_idxs, 'metric': result[r, c], 'metapath': metapath})
+
+
+    elif len(to_multiply) == 4:
+        result = [0]*to_multiply[1].shape[0]
+        first_res = to_multiply[0].T.multiply(to_multiply[1])
+
+        for row in first_res.sum(axis=1).nonzero()[0]:
+
+            result[row] = first_res[row, :].T.multiply(to_multiply[2]).multiply(to_multiply[3].T)
+
+            nz_rows = result[row].nonzero()[0]
+            nz_cols = result[row].nonzero()[1]
+
+            for r, c in zip(nz_rows, nz_cols):
+                node_idxs = []
+                node_idxs.append(start_idx)
+                node_idxs.append(row)
+                node_idxs.append(r)
+                node_idxs.append(c)
+                node_idxs.append(end_idx)
+
+                out.append({'node_idxs': node_idxs, 'metric': result[row][r, c], 'metapath': metapath})
+    return out
 
 
 def reshape(a, shape):

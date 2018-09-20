@@ -52,6 +52,7 @@ class MatrixFormattedGraph(object):
         self.index_to_nid = None
         self.id_to_metanode = None
         self.metanode_to_ids = None
+        self.nid_to_name = None
 
         # Read and/or store nodes as DataFrame
         if type(nodes) == str:
@@ -128,6 +129,8 @@ class MatrixFormattedGraph(object):
         self.metanode_to_ids = dict()
         for group_name, group in self.node_df.groupby('label'):
             self.metanode_to_ids[group_name] = group['id'].tolist()
+        # One more mapper of id to name
+        self.nid_to_name = self.node_df.set_index('id')['name'].to_dict()
 
     def _process_edges(self):
         """ Processes the edges to ensure all needed variables are present"""
@@ -315,17 +318,17 @@ class MatrixFormattedGraph(object):
 
         return pd.concat([start_end_df] + result, axis=1)
 
-
-
-
-    def _get_parallel_arguments(self, metapaths, start_idxs, end_idxs, start_type, end_type, matrices, verbose, walks=False):
+    def _get_parallel_arguments(self, metapaths, start_idxs, end_idxs, start_type,
+                                end_type, matrices, verbose, walks=False):
         """Gets the arguments needed for parallel processing"""
-        mats_subset_start, mats_subset_end = self._subset_matrices(matrices, start_idxs, end_idxs, start_type, end_type)
+        mats_subset_start, mats_subset_end = self._subset_matrices(matrices, start_idxs,
+                                                                   end_idxs, start_type, end_type)
 
         # Prepare functions for parallel processing
         arguments = []
         for mp in metapaths:
-            to_multiply = mt.get_matrices_to_multiply(mp, self.metapaths, matrices, mats_subset_start, mats_subset_end)
+            to_multiply = mt.get_matrices_to_multiply(mp, self.metapaths,
+                                                      matrices, mats_subset_start, mats_subset_end)
             if not walks:
                 edges = mt.get_edge_names(mp, self.metapaths)
                 arguments.append({'edges': edges, 'to_multiply': to_multiply,
@@ -362,14 +365,16 @@ class MatrixFormattedGraph(object):
             if edge.get_id()[0] == start_type:
                 mats_subset_start[e] = get_subset(matrices[e], leave_out_start, False)
                 if '>' in e and edge.get_id()[1] == start_type:
-                    mats_subset_start[mt.get_reverse_directed_edge(e)] = get_subset(matrices[e].T, leave_out_start, False)
+                    mats_subset_start[mt.get_reverse_directed_edge(e)] = get_subset(matrices[e].T,
+                                                                                    leave_out_start, False)
             elif edge.get_id()[1] == start_type:
                 mats_subset_start[e] = get_subset(matrices[e], leave_out_start, True)
 
             if edge.get_id()[1] == end_type:
                 mats_subset_end[e] = get_subset(matrices[e], leave_out_end, True)
                 if '>' in e and edge.get_id()[0] == end_type:
-                    mats_subset_end[mt.get_reverse_directed_edge(e)] = get_subset(matrices[e].T, leave_out_end, True)
+                    mats_subset_end[mt.get_reverse_directed_edge(e)] = get_subset(matrices[e].T,
+                                                                                  leave_out_end, True)
             elif edge.get_id()[0] == end_type:
                 mats_subset_end[e] = get_subset(matrices[e], leave_out_end, False)
 
@@ -416,6 +421,65 @@ class MatrixFormattedGraph(object):
         results = self._process_extraction_results(result, metapaths, start_ids, end_ids, start_name, end_name,
                                                    return_sparse=return_sparse)
         return results
+
+    def extract_paths(self, start_node, end_node, metapaths=None, degree_weighted=True, n_jobs=1):
+        # Validate the given nodes and get information on nodes needed for processing arguments.
+        # IDs could potentially be strings or integers..?
+        assert type(start_node) == str or not isinstance(start_node, collections.Iterable)
+        assert type(end_node) == str or not isinstance(end_node, collections.Iterable)
+        assert self.id_to_metanode[start_node] == self.start_kind
+        assert self.id_to_metanode[end_node] == self.end_kind
+        start_idx = self.nid_to_index[start_node]
+        end_idx = self.nid_to_index[end_node]
+
+        # Get all metapaths if none passed
+        if not metapaths:
+            metapaths = sorted(list(self.metapaths.keys()))
+        # If single metapath passed, make it a list
+        if type(metapaths) == str:
+            metapaths = [metapaths]
+
+        # Choose the correct matrix type for the given feature
+        if degree_weighted:
+            mats = self.degree_weighted_matrices
+        else:
+            mats = self.adj_matrices
+
+        arguments = []
+        path_nodes = {}
+        for mp in metapaths:
+            to_multiply = mt.get_matrices_to_multiply(mp, self.metapaths, mats)
+            to_multiply[0] = to_multiply[0][start_idx, :]
+            to_multiply[len(to_multiply)-1] = to_multiply[-1][:, end_idx]
+            arguments.append({'to_multiply': to_multiply, 'start_idx': start_idx,
+                              'end_idx': end_idx, 'metapath': mp})
+            edges = mt.get_edge_names(mp, self.metapaths)
+            path_nodes[mp] = [b.replace('<', '-').replace('>', '-').split(' - ')[0] for b in edges] + \
+                                [edges[-1].replace('<', '-').replace('>', '-').split(' - ')[-1]]
+
+        result = parallel_process(array=arguments, function=mt.get_individual_paths,
+                                  use_kwargs=True, n_jobs=n_jobs, front_num=0)
+
+        out = []
+
+        for r in result:
+            for res in r:
+                node_ids = []
+                nodes = []
+                for idx, node_type in zip(res['node_idxs'], path_nodes[res['metapath']]):
+                    node_id = self.index_to_nid[node_type][idx]
+                    node = self.nid_to_name[node_id]
+
+                    node_ids.append(node_id)
+                    nodes.append(node)
+
+                if len(node_ids) == len(set(node_ids)):
+                    out.append({'node_ids': node_ids, 'nodes': nodes, 'metapath': res['metapath'],
+                                'metric': res['metric']})
+
+        return out
+
+
 
     def extract_dwpc(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=False, n_jobs=1,
                      return_sparse=False):
@@ -492,8 +556,8 @@ class MatrixFormattedGraph(object):
         """
 
         return self._extract_metapath_feaures(metapaths=metapaths, start_nodes=start_nodes, end_nodes=end_nodes,
-                                              verbose=verbose, n_jobs=n_jobs, return_sparse=return_sparse, walks=False,
-                                              degree_weighted=False, message='Path Count')
+                                              verbose=verbose, n_jobs=n_jobs, return_sparse=return_sparse,
+                                              walks=False, degree_weighted=False, message='Path Count')
 
     def extract_degrees(self, start_nodes=None, end_nodes=None, subset=None):
         """
@@ -636,7 +700,8 @@ class MatrixFormattedGraph(object):
         # split the edge
         edge_split = edge.split(split_str)
 
-        return edge_split[0] == edge_split[-1] and (edge_split[0] == self.start_kind or edge_split[0] == self.end_kind)
+        return edge_split[0] == edge_split[-1] and (edge_split[0] == self.start_kind or
+                                                    edge_split[0] == self.end_kind)
 
     def contains_self_referential(self, edges):
         return sum([self.is_self_referential(e) for e in edges]) > 0
@@ -659,7 +724,7 @@ class MatrixFormattedGraph(object):
     def generate_blacklist(self, target_edge):
         """
         Generates a list of blacklisted features to be excluded from the model
-        
+
         :param target_edge: str, the name of the target edge to be learned in the model.
         :return: list, the blacklisted features.
         """
