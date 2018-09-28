@@ -34,12 +34,10 @@ class Transform(object):
             self.transformed_mean = data.mean(axis=0).A[0]
 
             # Standard dev is tricky to get fast/efficiently
+            # This method will turn Sparse columns to dense 1 at a time, for a
+            # Balanced approach to calculation
             def get_col_std(col):
-                N = col.shape[0]
-                sqr = col.copy()  # take a copy of the col
-                sqr.data **= 2  # square the data, i.e. just the non-zero data
-                variance = sqr.sum() / N - col.mean() ** 2
-                return np.sqrt(variance)
+                return col.A.std(ddof=1)
 
             stds = []
             for i in range(data.shape[1]):
@@ -117,7 +115,7 @@ class DWPCTransform(Transform):
     mean and standard deviation of the transformed values.
     """
 
-    def __init__(self, standardize=False):
+    def __init__(self, standardize=True):
         self.initial_mean = None
         Transform.__init__(self, standardize)
 
@@ -136,5 +134,5 @@ class DWPCTransform(Transform):
 
     def _transformation_function(self, data):
         if issparse(data):
-            return np.arcsinh(data.multiply(self.initial_mean**-1))
+            return np.arcsinh(data.multiply(self.initial_mean**-1)).tocsc()
         return np.arcsinh(data / self.initial_mean)
