@@ -150,7 +150,7 @@ def add_colons(df, id_name='', col_types={}):
     change_dict = {}
     for name in to_change:
         # Reserved column names go after the colon
-        if name in reserved_cols:
+        if name.lower() in reserved_cols:
             if name.lower() == 'id':
                 new_name = id_name + ':' + name.upper()
             else:
