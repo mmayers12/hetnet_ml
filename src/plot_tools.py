@@ -13,7 +13,7 @@ def graph_single_roc(y, y_pred, label="", lw=4, alpha=1):
         plt.plot(fpr, tpr, lw=lw, alpha=alpha)
 
 
-def graph_mean_roc(ys, y_preds, label="", lw=6, alpha=.8, fill_between=True, fill_alpha=.4):
+def calc_mean_roc_auc(ys, y_preds):
     tprs = []
     aucs = []
 
@@ -28,26 +28,39 @@ def graph_mean_roc(ys, y_preds, label="", lw=6, alpha=.8, fill_between=True, fil
         roc_auc = auc(fpr, tpr)
         aucs.append(roc_auc)
 
+    # Get mean and std_dev for metrics
     mean_tpr = np.mean(tprs, axis=0)
     mean_tpr[-1] = 1.0
     mean_auc = auc(mean_fpr, mean_tpr)
     std_auc = np.std(aucs)
+    std_tpr = np.std(tprs, axis=0)
 
+    return mean_tpr, mean_fpr, mean_auc, std_auc, std_tpr
+
+
+def graph_mean_roc(ys, y_preds, label="", lw=6, alpha=.8, fill_between=True, fill_alpha=.4):
+
+    result = calc_mean_roc_auc(ys, y_preds)
+    graph_mean_roc_from_metrics(*result, label, lw, alpha, fill_between, fill_alpha)
+
+
+def graph_mean_roc_from_metrics(mean_tpr, mean_fpr, mean_auc, std_auc, std_tpr, label="", lw=6, alpha=.8,
+                                fill_between=True, fill_alpha=.4):
     if label:
-        plt.plot(mean_fpr, mean_tpr,
-                 label=label + ' (AUC = %0.2f)' % mean_auc,
-                 lw=lw, alpha=alpha)
+        fig = plt.plot(mean_fpr, mean_tpr,
+                       label=label + ' (AUC = %0.2f)' % mean_auc,
+                       lw=lw, alpha=alpha)
     else:
-        plt.plot(mean_fpr, mean_tpr, color='b',
-                 label=r'Mean ROC (AUC = %0.2f $\pm$ %0.2f)' % (mean_auc, std_auc),
-                 lw=lw, alpha=alpha)
+        fig = plt.plot(mean_fpr, mean_tpr, color='b',
+                           label=r'Mean ROC (AUC = %0.2f $\pm$ %0.2f)' % (mean_auc, std_auc),
+                           lw=lw, alpha=alpha)
 
     if fill_between:
-        std_tpr = np.std(tprs, axis=0)
         tprs_upper = np.minimum(mean_tpr + std_tpr, 1)
         tprs_lower = np.maximum(mean_tpr - std_tpr, 0)
         plt.fill_between(mean_fpr, tprs_lower, tprs_upper, color='grey', alpha=fill_alpha,
                          label=r'$\pm$ 1 std. dev.')
+    return fig
 
 
 def graph_roc_boilerplate(title, size=24, w=8, h=7, loc='best'):
@@ -67,6 +80,7 @@ def graph_roc_boilerplate(title, size=24, w=8, h=7, loc='best'):
     plt.ylabel('True-Positives', size=size * .8333)
     plt.title(title, size=size)
     plt.legend(loc=loc, frameon=True, shadow=True, prop={'size': size * .666667})
+    return fig
 
 
 def graph_single_prc(y, y_pred, label="", lw=4, alpha=1):
@@ -77,7 +91,7 @@ def graph_single_prc(y, y_pred, label="", lw=4, alpha=1):
         plt.plot(rec, pre, lw=lw, alpha=alpha)
 
 
-def graph_mean_prc(ys, y_preds, label="", lw=6, alpha=.8, fill_between=True, fill_alpha=.4):
+def calc_mean_prc_auc(ys, y_preds):
     pres = []
     aucs = []
 
@@ -99,25 +113,38 @@ def graph_mean_prc(ys, y_preds, label="", lw=6, alpha=.8, fill_between=True, fil
     mean_pre[-1] = 0
     mean_auc = auc(mean_rec, mean_pre)
     std_auc = np.std(aucs)
+    std_pre = np.std(pres, axis=0)
+
+    return mean_pre, mean_rec, mean_auc, std_auc, std_pre
+
+
+def graph_mean_prc(ys, y_preds, label="", lw=6, alpha=.8, fill_between=True, fill_alpha=.4):
+
+    results = calc_mean_prc_auc(ys, y_preds)
+    graph_mean_prc_from_metrics(*results, label, lw, alpha, fill_between, fill_alpha)
+
+
+def graph_mean_prc_from_metrics(mean_pre, mean_rec, mean_auc, std_auc, std_pre,
+                                label="", lw=6, alpha=.8, fill_between=True, fill_alpha=.4):
     if label:
-        plt.plot(mean_rec, mean_pre,
-                 label=label+r' (AUC = %0.2f)' % mean_auc,
-                 lw=lw, alpha=alpha)
+        fig = plt.plot(mean_rec, mean_pre,
+                       label=label+r' (AUC = %0.2f)' % mean_auc,
+                       lw=lw, alpha=alpha)
     else:
-        plt.plot(mean_rec, mean_pre, color='b',
-                 label=r'Mean PRC (AUC = %0.2f $\pm$ %0.2f)' % (mean_auc, std_auc),
-                 lw=lw, alpha=alpha)
+        fig = plt.plot(mean_rec, mean_pre, color='b',
+                       label=r'Mean PRC (AUC = %0.2f $\pm$ %0.2f)' % (mean_auc, std_auc),
+                       lw=lw, alpha=alpha)
 
     if fill_between:
-        std_pre = np.std(pres, axis=0)
         pres_upper = np.minimum(mean_pre + std_pre, 1)
         pres_lower = np.maximum(mean_pre - std_pre, 0)
         plt.fill_between(mean_rec, pres_upper, pres_lower, color='grey', alpha=fill_alpha,
                          label=r'$\pm$ 1 std. dev.')
+    return fig
 
 
 def graph_prc_boilerplate(title, size=24, w=8, h=7, loc='best'):
-    """Run this after each single ROC curve plot"""
+    """Run this after each single PRC plot"""
 
     fig = plt.gcf()
     fig.set_size_inches(w, h)
@@ -129,4 +156,5 @@ def graph_prc_boilerplate(title, size=24, w=8, h=7, loc='best'):
     plt.xlabel('Recall', size=size*.8333)
     plt.ylabel('Precision', size=size*.8333)
     plt.title(title, size=size)
-    plt.legend(loc=loc, frameon=True, shadow=True, prop={'size':size*.666667});
+    plt.legend(loc=loc, frameon=True, shadow=True, prop={'size':size*.666667})
+    return fig
