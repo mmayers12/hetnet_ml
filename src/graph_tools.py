@@ -25,6 +25,42 @@ def map_id_to_value(nodes, value):
     return remove_colons(nodes).set_index('id')[value].to_dict()
 
 
+def parse_edge_abbrev(edge_abbrev):
+    """
+    Splits an edge abbrevation into subject abbrev, predicate abbrev, object abbrev.
+    e.g. 'CbG' returns ('C', 'b', 'G') or 'CDreg>CD' returns ('CD', 'reg', 'CD')
+
+    param: edge_abbrev, string, the abbreviation for the edge type
+
+    return: tuple of strings, each of the type abbrevatinos in the subeject predicate object triple.
+    """
+
+    e_type_abbrev = ''
+    start_abbrev = ''
+    end_abbrev = ''
+
+    start = True
+    for char in edge_abbrev:
+        # Direction is not in abbreviations, skip to next character
+        if char == '>' or char == '<':
+            continue
+
+        # When the abbreviation is in uppercase, abbreviating for node type
+        if char == char.upper():
+            if start:
+                start_abbrev += char
+            else:
+                end_abbrev += char
+
+        # When abbreviation is lowercase, you have the abbreviation for the edge
+        if char == char.lower():
+            # now no longer on the start nodetype, so set to false
+            start = False
+            e_type_abbrev += char
+
+    return (start_abbrev, e_type_abbrev, end_abbrev)
+
+
 def get_abbrev_dict_and_edge_tuples(nodes, edges):
     """
     Returns an abbreviation dictionary generated from class variables.
@@ -57,30 +93,7 @@ def get_abbrev_dict_and_edge_tuples(nodes, edges):
 
     for i, kind in enumerate(edge_kinds):
         edge_name = get_edge_name(kind)
-
-        # initialize the abbreviations
-        edge_abbrev = ''
-        start_abbrev = ''
-        end_abbrev = ''
-
-        start = True
-        for char in edge_abbrevs[i]:
-            # Direction is not in abbreviations, skip to next character
-            if char == '>' or char == '<':
-                continue
-
-            # When the abbreviation is in uppercase, abbreviating for node type
-            if char == char.upper():
-                if start:
-                    start_abbrev += char
-                else:
-                    end_abbrev += char
-
-            # When abbreviation is lowercase, you have the abbreviation for the edge
-            if char == char.lower():
-                # now no longer on the start nodetype, so set to false
-                start = False
-                edge_abbrev += char
+        start_abbrev, edge_abbrev, end_abbrev = parse_edge_abbrev(edge_abbrevs[i])
 
         # Have proper edge abbreviation
         edge_abbrev_dict[edge_name] = edge_abbrev
