@@ -130,7 +130,9 @@ class DWPCTransform(Transform):
             self.initial_mean = self.initial_mean.values
         except:
             pass
-        self.initial_mean[np.where(self.initial_mean == 0)] = 1
+        # If initial values are way to small, will get overflow error upon transformation
+        # So don't scale these
+        self.initial_mean[np.where(self.initial_mean < 0.000001)] = 1
 
     def _transformation_function(self, data):
         if issparse(data):
