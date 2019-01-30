@@ -174,6 +174,22 @@ class MatrixFormattedGraph(object):
             mp_info['standard_edge_abbreviations'] = [x.get_standard_abbrev() for x in mp.edges]
             self.metapaths[str(mp)] = mp_info
 
+        if max_length > 4:
+            print('Warning - Max length > 4 is still highly experimental')
+            print('Currently only 1 metanode repate is allowed in this mode')
+            to_remove = []
+            for mp, info in self.metapaths.items():
+                if info['length'] <= 4:
+                    continue
+                else:
+                    # Determine if this metapath  metanode the above printed repeat criteria
+                    repeats = mt.find_repeated_node_indices(info['edges'])
+                    if repeats and (len(repeats) > 1 or len(list(repeats.values())[0]) > 1):
+                        to_remove.append(mp)
+            for r in to_remove:
+                self.metapaths.pop(r)
+
+
     def get_adj_matrix(self, metaedge, directed=False):
         """
         Create a sparse adjacency matrix for the given metaedge.
