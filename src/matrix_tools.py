@@ -1,9 +1,9 @@
 import numpy as np
 import pandas as pd
 
-from scipy.sparse import diags, eye, csc_matrix, csr_matrix, coo_matrix
 from collections import defaultdict
 from itertools import combinations, chain
+from scipy.sparse import diags, eye, csc_matrix, csr_matrix, coo_matrix
 
 
 def get_path(metapath, metapaths):
