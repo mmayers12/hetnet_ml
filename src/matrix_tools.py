@@ -3,7 +3,7 @@ import pandas as pd
 
 from collections import defaultdict
 from itertools import combinations, chain
-from scipy.sparse import diags, eye, csc_matrix, csr_matrix, coo_matrix
+from scipy.sparse import diags, eye, csc_matrix, csr_matrix, coo_matrix, lil_matrix
 
 
 def get_path(metapath, metapaths):
@@ -107,6 +107,23 @@ def get_reverse_directed_edge(orig):
         # then grabs the start node abbreviation by indices and puts it in the end position.
         return orig[start_node[0]: start_node[-1] + 1] + orig[edge[0]: edge[-1] + 1] + '>' + orig_spl[0]
 
+
+def get_adj_matrix(dim_0, dim_1, start, end, directed=False, homogeneous=False):
+        """
+        Generates an adjcency matrix of shape (dim_0, dim_1) with values at index matrix[start, end] = 1
+        """
+
+        # Fast generation of a sparse matrix zeros matrix of appropriate dimension
+        mat = lil_matrix(np.zeros((dim_0, dim_1)), shape=(dim_0, dim_1), dtype='int16')
+
+        # Add edges to the matrix
+        for s, e in zip(start, end):
+            mat[s, e] = 1
+            # add reverse edge if undirected to same node type
+            if homogeneous and not directed:
+                mat[e, s] = 1
+
+        return mat.tocsc()
 
 def weight_by_degree(matrix, w=0.4):
     """

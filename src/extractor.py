@@ -15,7 +15,7 @@ class MatrixFormattedGraph(object):
     Class for adjacency matrix representation of the heterogeneous network.
     """
 
-    def __init__(self, nodes, edges, start_kind='Compound', end_kind='Disease', max_length=4, w=0.4):
+    def __init__(self, nodes, edges, start_kind='Compound', end_kind='Disease', max_length=4, w=0.4, n_jobs=1):
         """
         Initializes the adjacency matrices used for feature extraction.
 
@@ -32,9 +32,11 @@ class MatrixFormattedGraph(object):
             as well as all metapaths terminate.
         :param max_length: int, the maximum length of metapaths to be extracted by this feature extractor.
         :param w: float between 0 and 1. Dampening factor for producing degree-weighted matrices
+        :param n_jobs: int, the number of jobs to use for parallel processing.
         """
         # Initialize important class variables
         self.w = w
+        self.n_jobs = n_jobs
         self.metagraph = None
         self.start_kind = start_kind
         self.end_kind = end_kind
@@ -190,7 +192,7 @@ class MatrixFormattedGraph(object):
                 self.metapaths.pop(r)
 
 
-    def get_adj_matrix(self, metaedge, directed=False):
+    def _prepare_args_for_adj_matrix(self, metaedge):
         """
         Create a sparse adjacency matrix for the given metaedge.
 
@@ -210,34 +212,41 @@ class MatrixFormattedGraph(object):
         dim_0 = self.node_df.query('label == @node_0').shape[0]
         dim_1 = self.node_df.query('label == @node_1').shape[0]
 
-        # Fast generation of a sparse matrix zeros matrix of appropriate dimension
-        mat = lil_matrix(np.zeros((dim_0, dim_1)), shape=(dim_0, dim_1), dtype='int16')
-
         # Find the start and end nodes for edges of the given type
         start = edge['start_id'].apply(lambda i: self.nid_to_index[i])
         end = edge['end_id'].apply(lambda i: self.nid_to_index[i])
 
-        # Add edges to the matrix
-        for s, e in zip(start, end):
-            mat[s, e] = 1
-            # add reverse edge if undirected to same node type
-            if node_0 == node_1 and not directed:
-                mat[e, s] = 1
-
-        return mat.tocsc()
+        directed = '>' in metaedge or '<' in metaedge
+        homogeneous = node_0 == node_1
+        args = {'dim_0': dim_0, 'dim_1': dim_1, 'start': start, 'end': end,
+                'directed': directed, 'homogeneous': homogeneous}
+        return args
 
     def _generate_adjacency_matrices(self):
         """Generates adjacency matrices for performing path and walk count operations."""
         self.adj_matrices = dict()
+        mes = []
+        args = []
         for metaedge in tqdm(self.metaedges):
-            directed = '>' in metaedge or '<' in metaedge
-            self.adj_matrices[metaedge] = self.get_adj_matrix(metaedge, directed=directed)
+            mes.append(metaedge)
+            args.append(self._prepare_args_for_adj_matrix(metaedge))
+        res = parallel_process(array=args, function=mt.get_adj_matrix, use_kwargs=True, n_jobs=self.n_jobs,
+                               front_num=0)
+        for metaedge, matrix in zip(mes, res):
+            self.adj_matrices[metaedge] = matrix
 
     def _generate_weighted_matrices(self):
         """Generates the weighted matrices for DWPC and DWWC calculation"""
         self.degree_weighted_matrices = dict()
-        for metaedge, matrix in tqdm(self.adj_matrices.items()):
-            self.degree_weighted_matrices[metaedge] = mt.weight_by_degree(matrix, w=self.w)
+        mes = []
+        args = []
+        for metaedge, matrix in self.adj_matrices.items():
+            mes.append(metaedge)
+            args.append({'matrix': matrix, 'w': self.w})
+        res = parallel_process(array=args, function=mt.weight_by_degree, use_kwargs=True, n_jobs=self.n_jobs,
+                               front_num=0)
+        for metaedge, matrix in zip(mes, res):
+            self.degree_weighted_matrices[metaedge] = matrix
 
     def _validate_ids(self, ids):
         """Internal function to ensure that a given id is either a Node type or a list of node ids."""
@@ -252,6 +261,13 @@ class MatrixFormattedGraph(object):
                 return sorted(ids, key=lambda i: self.nid_to_index[i])
 
         raise ValueError()
+
+
+    def update_w(w):
+        print('Changing w from {} to {}. Please wait...'.format(self.w, w))
+
+        self.w = w
+        self._generate_weighted_matricies()
 
     def prep_node_info_for_extraction(self, start_nodes=None, end_nodes=None):
         """
