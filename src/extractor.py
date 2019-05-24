@@ -47,6 +47,8 @@ class MatrixFormattedGraph(object):
         self.nodes = None
         self.metaedges = None
         self.adj_matrices = None
+        self.out_degree = dict()
+        self.in_degree = dict()
         self.degree_weighted_matrices = None
 
         # Mappers to be used later
@@ -55,6 +57,7 @@ class MatrixFormattedGraph(object):
         self.id_to_metanode = None
         self.metanode_to_ids = None
         self.nid_to_name = None
+        self.metanode_to_edges = dict()
 
         # Read and/or store nodes as DataFrame
         if type(nodes) == str:
@@ -81,11 +84,17 @@ class MatrixFormattedGraph(object):
         # Initalize the metagraph and determine the metapaths available
         self._make_metagraph()
         self._determine_metapaths(start_kind, end_kind, max_length)
+        self._map_metanodes_to_metaedges()
 
         # Generate the adjacency matrices.
         print('Generating adjacency matrices...')
         time.sleep(0.5)
         self._generate_adjacency_matrices()
+
+        # Make Degree Weighted matrices.
+        print('\nDetermining degrees for each node and metaedge'.format(w))
+        time.sleep(0.5)
+        self._compute_node_degrees()
 
         # Make Degree Weighted matrices.
         print('\nWeighting matrices by degree with dampening factor {}...'.format(w))
@@ -191,6 +200,23 @@ class MatrixFormattedGraph(object):
             for r in to_remove:
                 self.metapaths.pop(r)
 
+    def _map_metanodes_to_metaedges(self):
+        """ Generate a mapping from Metanode to Metaedges and determine if metanode is at start or end of edge"""
+        # look through all metanodes
+        for kind in self.metanode_to_ids.keys():
+
+            # Nodes are abbreviated in Metaedge Abbrevioations
+            n_abbrev = self.metagraph.kind_to_abbrev[kind]
+
+            metanode_edges = dict()
+            # Find out which Metanodes this Metaedge participates in
+            for e in self.metaedges:
+                parsed = gt.parse_edge_abbrev(e)
+                if n_abbrev in parsed:
+                    # want to know if our metaedge of interest is the start or end of this metanode...
+                    metanode_edges[e] = {'start': parsed[0] == n_abbrev}
+            self.metanode_to_edges[kind] = metanode_edges
+
 
     def _prepare_args_for_adj_matrix(self, metaedge):
         """
@@ -227,13 +253,27 @@ class MatrixFormattedGraph(object):
         self.adj_matrices = dict()
         mes = []
         args = []
-        for metaedge in tqdm(self.metaedges):
+        for metaedge in self.metaedges:
             mes.append(metaedge)
             args.append(self._prepare_args_for_adj_matrix(metaedge))
         res = parallel_process(array=args, function=mt.get_adj_matrix, use_kwargs=True, n_jobs=self.n_jobs,
                                front_num=0)
         for metaedge, matrix in zip(mes, res):
             self.adj_matrices[metaedge] = matrix
+
+
+    def _compute_node_degrees(self):
+        """Computes node degree for all nodes and edge types."""
+        mes = []
+        args = []
+        for metaedge, matrix in self.adj_matrices.items():
+            mes.append(metaedge)
+            args.append(matrix)
+        res = parallel_process(array=args, function=mt.calculate_degrees, n_jobs=self.n_jobs, front_num=0)
+        for metaedge, (out_degree, in_degree) in zip(mes, res):
+            self.out_degree[metaedge] = out_degree
+            self.in_degree[metaedge] = in_degree
+
 
     def _generate_weighted_matrices(self):
         """Generates the weighted matrices for DWPC and DWWC calculation"""
@@ -242,7 +282,8 @@ class MatrixFormattedGraph(object):
         args = []
         for metaedge, matrix in self.adj_matrices.items():
             mes.append(metaedge)
-            args.append({'matrix': matrix, 'w': self.w})
+            args.append({'matrix': matrix, 'w': self.w, 'degree_fwd': self.out_degree[metaedge],
+                         'degree_rev': self.in_degree[metaedge]})
         res = parallel_process(array=args, function=mt.weight_by_degree, use_kwargs=True, n_jobs=self.n_jobs,
                                front_num=0)
         for metaedge, matrix in zip(mes, res):
@@ -268,6 +309,28 @@ class MatrixFormattedGraph(object):
 
         self.w = w
         self._generate_weighted_matricies()
+
+    def get_node_degree(self, node_id):
+        """
+        Returns a dictionary of the Edge Types and Corresponding Degrees for the requested node_id.
+
+        :param node_id: string, the identifier for the node
+
+        :return: Dict, key is the abbervation for the edge type, value is the degree of that node
+        """
+        kind = self.id_to_metanode[node_id]
+        idx = self.nid_to_index[node_id]
+        node_degrees = dict()
+
+        for metaedge, start in self.metanode_to_edges[kind].items():
+            current_matrix = self.adj_matrices[metaedge]
+            if start['start']:
+                deg = self.out_degree[metaedge][idx]
+            else:
+                deg = self.in_degree[metaedge][idx]
+            node_degrees[metaedge] = deg
+        return node_degrees
+
 
     def prep_node_info_for_extraction(self, start_nodes=None, end_nodes=None):
         """

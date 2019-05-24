@@ -125,7 +125,14 @@ def get_adj_matrix(dim_0, dim_1, start, end, directed=False, homogeneous=False):
 
         return mat.tocsc()
 
-def weight_by_degree(matrix, w=0.4):
+
+def calculate_degrees(matrix):
+    """Determines the outward and inward degrees of a matrix"""
+    out_degree = (matrix * matrix.T).diagonal()
+    in_degree = (matrix.T * matrix).diagonal()
+    return out_degree, in_degree
+
+def weight_by_degree(matrix, w=0.4, degree_fwd=None, degree_rev=None):
     """
     Weights an adjacency matrix by node degree.
 
@@ -134,9 +141,10 @@ def weight_by_degree(matrix, w=0.4):
 
     :return: Sparse Adjacency Matrix, weighted by degree
     """
-
-    degree_fwd = (matrix * matrix.T).diagonal()
-    degree_rev = (matrix.T * matrix).diagonal()
+    if degree_fwd is None:
+        degree_fwd = (matrix * matrix.T).diagonal()
+    if degree_rev is None:
+        degree_rev = (matrix.T * matrix).diagonal()
 
     # set 0s to 1s
     degree_fwd[np.where(degree_fwd == 0)] = 1
