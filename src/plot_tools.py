@@ -6,7 +6,7 @@ from sklearn.metrics import precision_recall_curve, roc_curve, auc
 
 
 def graph_single_roc(y, y_pred, label="", lw=4, alpha=1):
-    fpr, tpr, thresh = roc_curve(y, y_pred)
+    fpr, tpr, thresh = roc_curve(y, y_pred, drop_intermediate=False)
     if label:
         plt.plot(fpr, tpr, lw=lw, alpha=alpha, label=label+" (AUC = {:0.2f})".format(auc(fpr, tpr)))
     else:
@@ -21,7 +21,7 @@ def calc_mean_roc_auc(ys, y_preds):
 
     for y, y_pred in zip(ys, y_preds):
         # Compute ROC curve and area the curve
-        fpr, tpr, thresholds = roc_curve(y, y_pred)
+        fpr, tpr, thresholds = roc_curve(y, y_pred, drop_intermediate=False)
 
         tprs.append(interp(mean_fpr, fpr, tpr))
         tprs[-1][0] = 0.0
@@ -76,8 +76,8 @@ def graph_roc_boilerplate(title, size=24, w=8, h=7, loc='best'):
     plt.ylim([-0.01, 1.01])
     plt.xticks(size=size * .666667)
     plt.yticks(size=size * .666667)
-    plt.xlabel('False-Positives', size=size * .8333)
-    plt.ylabel('True-Positives', size=size * .8333)
+    plt.xlabel('False Positive Rate', size=size * .8333)
+    plt.ylabel('True Positive Rate', size=size * .8333)
     plt.title(title, size=size)
     plt.legend(loc=loc, frameon=True, shadow=True, prop={'size': size * .666667})
     return fig
@@ -158,3 +158,4 @@ def graph_prc_boilerplate(title, size=24, w=8, h=7, loc='best'):
     plt.title(title, size=size)
     plt.legend(loc=loc, frameon=True, shadow=True, prop={'size':size*.666667})
     return fig
+
