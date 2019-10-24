@@ -7,12 +7,12 @@ this tool attempts to qucikly and efficiently extract metapath based features in
 the degree-weighted path counts as described by 
 [Himmelstein et al.](http://journals.plos.org/ploscompbiol/article?id=10.1371/journal.pcbi.1004259).
 
-## Requirments
+## Installation
 
-scipy 0.19.0 or greater  
-pandas  0.20.2 or greater  
-numpy 1.13.0 or greater  
-[hetio]('https://github.com/dhimmel/hetio')  
+Run the following command to install via pip
+
+    pip install pip install git+https://github.com/mmayers12/hetnet_ml
+
 
 ## Caution!
 

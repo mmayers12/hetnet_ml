@@ -11,6 +11,7 @@ nohup.out
 *.o
 *.so
 *.pyc
+*.egg-info
 
 # Notebook files #
 ##################

@@ -5,7 +5,7 @@ import pandas as pd
 from tqdm import tqdm
 from scipy.sparse import lil_matrix, hstack
 from hetio.hetnet import MetaGraph
-from parallel import parallel_process
+from .parallel import parallel_process
 from . import graph_tools as gt
 from . import matrix_tools as mt
 
