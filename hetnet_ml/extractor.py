@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from scipy.sparse import lil_matrix, hstack
-from hetio.hetnet import MetaGraph
+from hetnetpy.hetnet import MetaGraph
 from .parallel import parallel_process
 from . import graph_tools as gt
 from . import matrix_tools as mt
@@ -476,7 +476,8 @@ class MatrixFormattedGraph(object):
         return mats_subset_start, mats_subset_end
 
     def _extract_metapath_feaures(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=False, n_jobs=1,
-                                  return_sparse=False, walks=False, degree_weighted=True, message=''):
+                                  return_sparse=False, func=lambda x: x, degree_weighted=True, message='',
+                                  process_result=True):
         """Internal function for extracting any metapath based feature"""
         # Validate the given nodes and get information on nodes needed for results formatting.
         start_idxs, end_idxs, start_type, end_type, start_ids, end_ids, start_name, end_name = \
@@ -493,31 +494,56 @@ class MatrixFormattedGraph(object):
             mats = self.adj_matrices
 
         # Prepare functions for parallel processing
-        print('Preparing function arguments...')
+        if verbose:
+            print('Preparing function arguments...')
+        # Walks require different arguments than paths
+        walks = func == mt.count_walks
+        # Setting verbose to false for the arguments... You'll never want to see those printed out
+        # Especially if running in parallel... (may make it user-defined later)
         arguments = self._get_parallel_arguments(metapaths=metapaths, matrices=mats,
                                                  start_idxs=start_idxs, end_idxs=end_idxs, start_type=start_type,
-                                                 end_type=end_type, verbose=verbose, walks=walks)
+                                                 end_type=end_type, verbose=False, walks=walks)
 
-        print('Calculating {}s...'.format(message))
-        time.sleep(0.5)
+        if verbose:
+            print('Calculating {}s...'.format(message))
+            time.sleep(0.5)
 
         # Walk and path counts use different functions
-        if walks:
-            func = mt.count_walks
-        else:
+        if func is None:
             func = mt.count_paths
 
-        result = parallel_process(array=arguments, function=func, use_kwargs=True, n_jobs=n_jobs, front_num=0)
-
         # Run the feature extraction calculation processes in parallel
+        result = parallel_process(array=arguments, function=func, use_kwargs=True, n_jobs=n_jobs,
+                                  front_num=0, verbose=verbose)
+
+        # Potentially free up some memory?
         del arguments
 
         # Process and return results
-        results = self._process_extraction_results(result, metapaths, start_ids, end_ids, start_name, end_name,
-                                                   return_sparse=return_sparse)
+        if process_result:
+            results = self._process_extraction_results(result, metapaths, start_ids, end_ids, start_name, end_name,
+                                                       return_sparse=return_sparse)
+        else:
+            return result, metapaths
+
         return results
 
     def extract_paths(self, start_node, end_node, metapaths=None, degree_weighted=True, n_jobs=1):
+        """
+        Extract the paths between two node for a given set of metapaths.
+
+        :param start_node: str, the Identifier for the starting node in the path
+        :param end_node: str, the identifier for the ending node in the path
+        :param metapaths: list, str, or None. The metapath(s) to extract the exact paths for. If None,
+            paths along all metapaths will be extracted
+        :param degree_weighted: bool, if True, path counts returned will show their corresponding degree weights
+        :param n_jobs: int, the number of parallel processes to run the extraction on. The jobs are split by metapath
+            so having n_jobs > len(meatapths) provides no additional benefit
+
+        :return: dict, information on each path between the start and end node, including identifiers and names of
+            nodes that make up that path.
+        """
+
         # Validate the given nodes and get information on nodes needed for processing arguments.
         # IDs could potentially be strings or integers..?
         assert type(start_node) == str or not isinstance(start_node, collections.Iterable)
@@ -574,16 +600,40 @@ class MatrixFormattedGraph(object):
 
         return out
 
+    def extract_metapath_pair_counts(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=False, n_jobs=1):
+        """
+        Answers the question: For a given metapath and list of start and end nodes, how many start-end node pairs
+        have AT LEAST one connecting path of the given metapath.
 
+        :param metapaths: list or None, the metapaths paths to calculate values for.  If None, will calculate
+            pair count values for metapaths in this class.
+        :param start_nodes: String or list, String title of the metanode start of the metapaths.
+            If a list, can be IDs corresponding to a subset of starting nodes for the DWPC.
+        :param end_nodes: String or list, String title of the metanode for the end of the metapaths.  If a
+            list, can be IDs corresponding to a subset of ending nodes for the DWPC.
+        :param verbose: boolean, if True, prints text and progreess bars.
+        :param n_jobs: int, the number of jobs to use for parallel processing.
+        :param return_sparse: boolean, if true, returns a pandas.SparseDataFrame output.  Good if the data size is
+            known to be potentially very large.
+
+        :return: pandas.DataFrame, Table of results with columns corresponding to DWPC values from start_id to
+            end_id for each metapath.
+        """
+
+        counts, metapaths = self._extract_metapath_feaures(metapaths=metapaths, start_nodes=start_nodes,
+                                                           end_nodes=end_nodes, verbose=verbose, n_jobs=n_jobs,
+                                                           func=mt.count_metapath_paris, degree_weighted=False,
+                                                           message='Metapath Pair Count', process_result=False)
+
+        return pd.DataFrame({'mp': metapaths, 'pair_count': counts})
 
     def extract_dwpc(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=False, n_jobs=1,
                      return_sparse=False):
         """
         Extracts DWPC metrics for the given metapaths.  If no metapaths are given, will calcualte for all metapaths.
 
-        :param metapaths: list or None, the metapaths paths to calculate DWPC values for.  List must be a subset of
-            those found in metapahts.json.  If None, will calcualte DWPC values for metapaths in the metapaths.json
-            file.
+        :param metapaths: list or None, the metapaths paths to calculate DWPC values for.  If None, will calculate
+            DWPC values for metapaths in this class (self.metapaths).
         :param start_nodes: String or list, String title of the metanode start of the metapaths.
             If a list, can be IDs corresponding to a subset of starting nodes for the DWPC.
         :param end_nodes: String or list, String title of the metanode for the end of the metapaths.  If a
@@ -600,16 +650,15 @@ class MatrixFormattedGraph(object):
 
         return self._extract_metapath_feaures(metapaths=metapaths, start_nodes=start_nodes, end_nodes=end_nodes,
                                               verbose=verbose, n_jobs=n_jobs, return_sparse=return_sparse,
-                                              walks=False, degree_weighted=True, message='DWPC')
+                                              func=mt.count_paths, degree_weighted=True, message='DWPC')
 
     def extract_dwwc(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=False, n_jobs=1,
                      return_sparse=False):
         """
         Extracts DWWC metrics for the given metapaths.  If no metapaths are given, will calcualte for all metapaths.
 
-        :param metapaths: list or None, the metapaths paths to calculate DWPC values for.  List must be a subset of
-            those found in metapahts.json.  If None, will calcualte DWPC values for all metapaths in the
-            metapaths.json file.
+        :param metapaths: list or None, the metapaths paths to calculate DWPC values for.  If None, will calculate
+            DWWC values for all metapaths in this class (self.metapaths).
         :param start_nodes: String or list, String title of the metanode for the start of the metapaths.
             If a list, can be IDs corresponding to a subset of starting nodes for the DWWC.
         :param end_nodes: String or list, String title of the metanode for the end of the metapaths.  If a
@@ -626,16 +675,15 @@ class MatrixFormattedGraph(object):
 
         return self._extract_metapath_feaures(metapaths=metapaths, start_nodes=start_nodes, end_nodes=end_nodes,
                                               verbose=verbose, n_jobs=n_jobs, return_sparse=return_sparse,
-                                              walks=True, degree_weighted=True, message='DWWC')
+                                              func=mt.count_walks, degree_weighted=True, message='DWWC')
 
     def extract_path_count(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=False, n_jobs=1,
                            return_sparse=False):
         """
         Extracts path counts for the given metapaths.  If no metapaths are given, will calcualte for all metapaths.
 
-        :param metapaths: list or None, the metapaths paths to calculate DWPC values for.  List must be a subset of
-            those found in metapahts.json.  If None, will calcualte DWPC values for metapaths in the metapaths.json
-            file.
+        :param metapaths: list or None, the metapaths paths to calculate DWPC values for. If None, will calculate
+            Path Count values for metapaths in this class (self.metapaths).
         :param start_nodes: String or list, String title of the metanode start of the metapaths.
             If a list, can be IDs corresponding to a subset of starting nodes for the DWPC.
         :param end_nodes: String or list, String title of the metanode for the end of the metapaths.  If a
@@ -652,7 +700,7 @@ class MatrixFormattedGraph(object):
 
         return self._extract_metapath_feaures(metapaths=metapaths, start_nodes=start_nodes, end_nodes=end_nodes,
                                               verbose=verbose, n_jobs=n_jobs, return_sparse=return_sparse,
-                                              walks=False, degree_weighted=False, message='Path Count')
+                                              func=mt.count_paths, degree_weighted=False, message='Path Count')
 
     def extract_degrees(self, start_nodes=None, end_nodes=None, subset=None):
         """

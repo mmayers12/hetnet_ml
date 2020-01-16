@@ -684,6 +684,19 @@ def get_matrices_to_multiply(metapath, metapaths, matrices, mats_subset_start=No
     return to_multiply
 
 
+def count_metapath_paris(**params):
+
+    # Get path counts
+    paths = count_paths(**params)
+    # only care about number of non-zero results
+    count = paths.nnz
+
+    # maybe this will help with ballooning memory on large number of metapaths?
+    del paths
+
+    return count
+
+
 def count_paths(edges, to_multiply, start_idxs=None, end_idxs=None, verbose=False,
                 uncountable_estimate_func=estimate_count_from_repeats, uncountable_params=None):
     """

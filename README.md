@@ -11,7 +11,7 @@ the degree-weighted path counts as described by
 
 Run the following command to install via pip
 
-    pip install pip install git+https://github.com/mmayers12/hetnet_ml
+    pip install git+https://github.com/mmayers12/hetnet_ml
 
 
 ## Caution!
