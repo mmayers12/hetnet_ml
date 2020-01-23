@@ -3,11 +3,69 @@ import collections
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+from copy import deepcopy
 from scipy.sparse import lil_matrix, hstack
 from hetnetpy.hetnet import MetaGraph
 from .parallel import parallel_process
 from . import graph_tools as gt
 from . import matrix_tools as mt
+
+
+def piecewise_extraction(function, to_split, block_size=1000, axis=0, ignore_cols=None, **params):
+    """
+    Wrapper function for any MatrixFormattedGraph `extract` function. Allows parallel runs to be split into
+    Blocks so that parallel processing memory overhead can be reduced.  By smartly designing the blocks,
+    Significant reduction in totaly memory usage can be achieved without a major reduction in speed.
+
+
+    :param function: function, The MatrixFormattedGraph function to be run in a piecewise fashion
+    :param to_split: str, The name of the parameter to split over (metapaths seems to work best)
+    :param block_size: int, size of each split to be run in parallel, before dumping the results
+    :param axis: int [0, 1], the axis to concatenate the results across
+    :param ignore_cols: list of str, the column names to ignore for concatenation (only important if axis=1).
+        e.g. if each result returns an identifier column, will incude for the first block, then drop for all
+        subsequent blocks
+    :param params: parameters for the function
+
+    :return: DataFrame of concatenated results
+    """
+    assert type(to_split) == str and to_split in params
+
+    # Won't want progress bars for each subset
+    params['verbose'] = False
+
+    # Retain a copy of the original parameters
+    full_params = deepcopy(params)
+    total = len(params[to_split])
+
+    # Determine the number of iterations needed
+    num_iter = total // block_size
+    if total % block_size != 0:
+        num_iter += 1
+
+    all_results = []
+    for i in tqdm(range(num_iter)):
+
+        # Get the start and end indices
+        start = i * block_size
+        end = (i + 1) * block_size
+
+        # End can't be larger than the total number items
+        if end > total:
+            end = total
+
+        # Subset the parameter of interest
+        params[to_split] = full_params[to_split][start: end]
+
+        # Get the function results
+        all_results.append(function(**params))
+
+    if ignore_cols is not None:
+        to_cat = [r.drop(ignore_cols, axis=axis) if i > 0 else r for i, r in enumerate(all_results)]
+    else:
+        to_cat = all_results
+
+    return pd.concat(to_cat, sort=False, axis=axis)
 
 
 class MatrixFormattedGraph(object):
@@ -58,6 +116,8 @@ class MatrixFormattedGraph(object):
         self.metanode_to_ids = None
         self.nid_to_name = None
         self.metanode_to_edges = dict()
+        self._modified_edges = None
+        self._weighted_modified_edges = None
 
         # Read and/or store nodes as DataFrame
         if type(nodes) == str:
@@ -217,20 +277,18 @@ class MatrixFormattedGraph(object):
                     metanode_edges[e] = {'start': parsed[0] == n_abbrev}
             self.metanode_to_edges[kind] = metanode_edges
 
-
-    def _prepare_args_for_adj_matrix(self, metaedge):
+    def _prepare_parallel_adj_matrix_args(self, edge):
         """
         Create a sparse adjacency matrix for the given metaedge.
 
-        :param metaedge: String, the abbreviation for the metadge. e.g. 'CbG' for Combound-binds-Gene
-        :param directed: bool, if the edge is directed (only important for edges between the same metanode).
+        :param edge: Dataframe, the edge to be processed
 
         :return: Sparse matrix, adjacency matrix for the given metaedge. Row and column indices correspond
             to the order of the node ids in the global variable `nodes`.
         """
 
-        # Subeset the edges based on the metaedge
-        edge = self.edge_df.query('abbrev == @metaedge')
+        # get the metaedge from the edges
+        metaedge = edge['abbrev'].iloc[0]
 
         # Find the type and dimensions of the nodes that make up the metaedge
         node_0 = self.id_to_metanode[edge['start_id'].iloc[0]]
@@ -255,12 +313,11 @@ class MatrixFormattedGraph(object):
         args = []
         for metaedge in self.metaedges:
             mes.append(metaedge)
-            args.append(self._prepare_args_for_adj_matrix(metaedge))
+            args.append(self._prepare_parallel_adj_matrix_args(self.edge_df.query('abbrev == @metaedge')))
         res = parallel_process(array=args, function=mt.get_adj_matrix, use_kwargs=True, n_jobs=self.n_jobs,
                                front_num=0)
         for metaedge, matrix in zip(mes, res):
             self.adj_matrices[metaedge] = matrix
-
 
     def _compute_node_degrees(self):
         """Computes node degree for all nodes and edge types."""
@@ -273,7 +330,6 @@ class MatrixFormattedGraph(object):
         for metaedge, (out_degree, in_degree) in zip(mes, res):
             self.out_degree[metaedge] = out_degree
             self.in_degree[metaedge] = in_degree
-
 
     def _generate_weighted_matrices(self):
         """Generates the weighted matrices for DWPC and DWWC calculation"""
@@ -303,12 +359,11 @@ class MatrixFormattedGraph(object):
 
         raise ValueError()
 
-
-    def update_w(w):
+    def update_w(self, w):
         print('Changing w from {} to {}. Please wait...'.format(self.w, w))
 
         self.w = w
-        self._generate_weighted_matricies()
+        self._generate_weighted_matrices()
 
     def get_node_degree(self, node_id):
         """
@@ -331,6 +386,99 @@ class MatrixFormattedGraph(object):
             node_degrees[metaedge] = deg
         return node_degrees
 
+    def remove_edges(self, to_remove):
+        """
+        Removes the given edges from the adjacency matrices. Used for removing holdout set positives from the network
+         in a Cross-Validation framework.
+
+        :param to_remove: DataFrame subset of edges to be removed
+
+        """
+        # validate the incoming removal request
+        assert 'start_id' in to_remove.columns
+        assert 'end_id' in to_remove.columns
+        assert 'type' in to_remove.columns
+
+        # Ensure edges have abbrevations
+        if 'abbrev' not in to_remove.columns:
+            if all(to_remove['type'].str.contains('_')):
+                to_remove['abbrev'] = to_remove['type'].apply(lambda t: '_'.join(t.split('_')))
+            else:
+                raise ValueError('Edge Abbreviations not provieded for edge removal')
+
+        # Determine the edges to alter
+        altered_edges = to_remove['abbrev'].unique()
+        args = []
+
+        # Ensure that the network is unmodified
+        # Must run .reset_edges() before running subsequent .remove_edges()
+        assert self._modified_edges is None
+        assert self._weighted_modified_edges is None
+
+        for edge in altered_edges:
+            current_edges = self.edge_df.query('abbrev == @edge')
+            remove_edges = set(to_remove.query('abbrev == @edge')[['start_id', 'end_id']].apply(tuple, axis=1))
+
+            filtered_edges = []
+            for row in current_edges.itertuples():
+                # Add to filtered edges if not in the remove edges
+                if not {tuple([row.start_id, row.end_id])} & remove_edges:
+                    filtered_edges.append(row)
+
+            # Rebuild the DataFrame
+            filtered_edges = pd.DataFrame(filtered_edges)
+
+            # Get arguments for building the new adjacency matrices
+            args.append(self._prepare_parallel_adj_matrix_args(filtered_edges))
+
+        # Get the new adjacency matrices
+        res = parallel_process(array=args, function=mt.get_adj_matrix, use_kwargs=True, n_jobs=self.n_jobs,
+                               front_num=0)
+
+        # Get the new results and reset the args for weighted calculations
+        modded_edges = dict()
+        args = []
+        for metaedge, matrix in zip(altered_edges, res):
+            modded_edges[metaedge] = matrix
+            args.append(matrix)
+        res = parallel_process(array=args, function=mt.calculate_degrees, n_jobs=self.n_jobs, front_num=0)
+
+        # Prepare the Args for degree weighted calulations
+        args = []
+        for (metaedge, matrix), (out_degree, in_degree) in zip(modded_edges.items(), res):
+            args.append({'matrix': matrix, 'w': self.w, 'degree_fwd': out_degree,
+                         'degree_rev': in_degree})
+        res = parallel_process(array=args, function=mt.weight_by_degree, use_kwargs=True, n_jobs=self.n_jobs,
+                               front_num=0)
+
+        # Unpack the new degree-weighted results
+        modded_dw_edges = dict()
+        for metaedge, matrix in zip(altered_edges, res):
+            modded_dw_edges[metaedge] = matrix
+
+        # Cache the original values for easy recovery
+        self._modified_edges = {k: v for k, v in self.adj_matrices.items() if k in modded_edges.keys()}
+        self._weighted_modified_edges = {k: v for k, v in self.degree_weighted_matrices.items()
+                                         if k in modded_edges.keys()}
+
+        # and Update the edges
+        self.adj_matrices = {**self.adj_matrices, **modded_edges}
+        self.degree_weighted_matrices = {**self.degree_weighted_matrices, **modded_dw_edges}
+
+    def reset_edges(self):
+        """Resets edges altered due to .remove_edges() function to their original values"""
+
+        # Ensure original edges are stored in cache, otherwise nothing to do.
+        if self._modified_edges is None or self._weighted_modified_edges is None:
+            return
+
+        # Restore the former value from cache
+        self.adj_matrices = {**self.adj_matrices, **self._modified_edges}
+        self.degree_weighted_matrices = {**self.degree_weighted_matrices, **self._weighted_modified_edges}
+
+        # Reset the edge cache
+        self._modified_edges = None
+        self._weighted_modified_edges = None
 
     def prep_node_info_for_extraction(self, start_nodes=None, end_nodes=None):
         """
@@ -372,43 +520,53 @@ class MatrixFormattedGraph(object):
         return start_idxs, end_idxs, start_type, end_type, start_ids, end_ids, start_name, end_name
 
     def _process_extraction_results(self, result, metapaths, start_ids, end_ids, start_name, end_name,
-                                    return_sparse=False):
+                                    return_sparse=False, verbose=False):
         """
         Internal function to process lists of matrices and metapaths into a DataFrame (or SparseDataFrame) with
         start_node and end_node ids as columns as well as a column for each metapath. Each row will represent the
         path or walk count for a given start_node, end_node pair.
+        :param verbose:
         """
         from itertools import product
 
         if return_sparse:
             # Turn each result matrix into a series
-            print('\nReshaping Result Matrices...')
-            time.sleep(0.5)
+            if verbose:
+                print('\nReshaping Result Matrices...')
+                time.sleep(0.5)
 
             size = result[0].shape[0]*result[0].shape[1]
             result = [mt.reshape(res, (size, 1)) for res in tqdm(result)]
-            print('Stacking columns...')
+            if verbose:
+                print('Stacking columns...')
             result = hstack(result)
             result = pd.SparseDataFrame(result, columns=metapaths, default_fill_value=0.0)
 
-            # Past all the series together into a DataFrame
-            print('\nGenerating DataFrame...')
+            if verbose:
+                # Past all the series together into a DataFrame
+                print('\nGenerating DataFrame...')
             start_end_df = pd.DataFrame(list(product(start_ids, end_ids)), columns=[start_name, end_name])
             start_end_df = start_end_df.to_sparse()
 
             return pd.concat([start_end_df, result], axis=1)
 
         # Turn each result matrix into a series
-        print('\nFormatting results to series...')
-        time.sleep(0.5)
+        if verbose:
+            print('\nFormatting results to series...')
+            time.sleep(0.5)
 
         # Currently running in series.  Extensive testing has found no incense in speed via Parallel processing
         # However, parallel usually results in an inaccurate counter.
-        for i in tqdm(range(len(metapaths))):
-            result[i] = mt.to_series(result[i], name=metapaths[i]).reset_index(drop=True)
+        if verbose:
+            for i in tqdm(range(len(metapaths))):
+                result[i] = mt.to_series(result[i], name=metapaths[i]).reset_index(drop=True)
+        else:
+            for i in range(len(metapaths)):
+                result[i] = mt.to_series(result[i], name=metapaths[i]).reset_index(drop=True)
 
-            # Past all the series together into a DataFrame
-        print('\nConcatenating series to DataFrame...')
+        # Paste all the series together into a DataFrame
+        if verbose:
+            print('\nConcatenating series to DataFrame...')
         start_end_df = pd.DataFrame(list(product(start_ids, end_ids)), columns=[start_name, end_name])
 
         return pd.concat([start_end_df] + result, axis=1)
@@ -427,7 +585,7 @@ class MatrixFormattedGraph(object):
             if not walks:
                 edges = mt.get_edge_names(mp, self.metapaths)
                 arguments.append({'edges': edges, 'to_multiply': to_multiply,
-                                  'start_idxs': start_idxs, 'end_idxs': end_idxs, 'verbose': verbose})
+                                  'start_idxs': start_idxs, 'end_idxs': end_idxs, 'verbose': False})
             else:
                 arguments.append({'to_multiply': to_multiply})
         return arguments
@@ -475,7 +633,7 @@ class MatrixFormattedGraph(object):
 
         return mats_subset_start, mats_subset_end
 
-    def _extract_metapath_feaures(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=False, n_jobs=1,
+    def _extract_metapath_feaures(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=True, n_jobs=1,
                                   return_sparse=False, func=lambda x: x, degree_weighted=True, message='',
                                   process_result=True):
         """Internal function for extracting any metapath based feature"""
@@ -502,7 +660,7 @@ class MatrixFormattedGraph(object):
         # Especially if running in parallel... (may make it user-defined later)
         arguments = self._get_parallel_arguments(metapaths=metapaths, matrices=mats,
                                                  start_idxs=start_idxs, end_idxs=end_idxs, start_type=start_type,
-                                                 end_type=end_type, verbose=False, walks=walks)
+                                                 end_type=end_type, verbose=verbose, walks=walks)
 
         if verbose:
             print('Calculating {}s...'.format(message))
@@ -522,7 +680,7 @@ class MatrixFormattedGraph(object):
         # Process and return results
         if process_result:
             results = self._process_extraction_results(result, metapaths, start_ids, end_ids, start_name, end_name,
-                                                       return_sparse=return_sparse)
+                                                       return_sparse=return_sparse, verbose=verbose)
         else:
             return result, metapaths
 
@@ -906,3 +1064,5 @@ class MatrixFormattedGraph(object):
                 blacklist.append('dwpc_' + mp)
 
         return blacklist
+
+
