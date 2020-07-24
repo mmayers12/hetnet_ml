@@ -4,14 +4,15 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from copy import deepcopy
-from scipy.sparse import lil_matrix, hstack
+from itertools import chain
+from scipy.sparse import lil_matrix, hstack, vstack, csc_matrix, csr_matrix
 from hetnetpy.hetnet import MetaGraph
 from .parallel import parallel_process
 from . import graph_tools as gt
 from . import matrix_tools as mt
 
 
-def piecewise_extraction(function, to_split, block_size=1000, axis=0, ignore_cols=None, **params):
+def piecewise_extraction(function, to_split, block_size=1000, axis=0, **params):
     """
     Wrapper function for any MatrixFormattedGraph `extract` function. Allows parallel runs to be split into
     Blocks so that parallel processing memory overhead can be reduced.  By smartly designing the blocks,
@@ -22,17 +23,19 @@ def piecewise_extraction(function, to_split, block_size=1000, axis=0, ignore_col
     :param to_split: str, The name of the parameter to split over (metapaths seems to work best)
     :param block_size: int, size of each split to be run in parallel, before dumping the results
     :param axis: int [0, 1], the axis to concatenate the results across
-    :param ignore_cols: list of str, the column names to ignore for concatenation (only important if axis=1).
-        e.g. if each result returns an identifier column, will incude for the first block, then drop for all
-        subsequent blocks
-    :param params: parameters for the function
+    :param **params: parameters for the function
 
     :return: DataFrame of concatenated results
     """
     assert type(to_split) == str and to_split in params
+    assert axis in [0, 1]
 
     # Won't want progress bars for each subset
     params['verbose'] = False
+
+    # Need some other params for post processing
+    sparse_output = params.get('return_sparse', False)
+    sparse_df = params.get('sparse_df', True)
 
     # Retain a copy of the original parameters
     full_params = deepcopy(params)
@@ -44,6 +47,7 @@ def piecewise_extraction(function, to_split, block_size=1000, axis=0, ignore_col
         num_iter += 1
 
     all_results = []
+    meta_results = []
     for i in tqdm(range(num_iter)):
 
         # Get the start and end indices
@@ -58,14 +62,50 @@ def piecewise_extraction(function, to_split, block_size=1000, axis=0, ignore_col
         params[to_split] = full_params[to_split][start: end]
 
         # Get the function results
-        all_results.append(function(**params))
+        current_result = function(**params)
+        if type(current_result) == pd.DataFrame:
+            all_results.append(current_result)
+        elif type(current_result) == tuple:
+            # The feature matrix is always the last element of the tuple
+            all_results.append(current_result[-1])
+            # Other metadata can be stored in other parts of the tuple
+            meta_results.append(current_result[:-1])
 
-    if ignore_cols is not None:
-        to_cat = [r.drop(ignore_cols, axis=axis) if i > 0 else r for i, r in enumerate(all_results)]
+    # This combination results in sparse matrices returned
+    if sparse_output and not sparse_df:
+        if axis == 0:
+            # vstack works best on csr matrcies
+            if type(results[0]) != csr_matrix:
+                all_results = [r.to_coo().to_csr() for r in all_results]
+            out = vstack(all_results)
+        else:
+            # hstack works best on csc matrcies
+            if type(all_results[0]) != csc_matrix:
+                all_results = [r.to_coo().to_csc() for r in all_results]
+            out = hstack(all_results)
+
+    # Dataframe result, use concat to join
     else:
-        to_cat = all_results
+        out = pd.concat(all_results, sort=False, axis=axis)
 
-    return pd.concat(to_cat, sort=False, axis=axis)
+    # right now meta will either be None, (DataFrame, ) or ((DataFrame, List), )
+    # Pair Counts, datframe result, or sparse mat result respectively
+    # But will try to write this as specifically as possible so other options can be added in future
+    out_meta = []
+    if meta_results:
+        for mr in meta_results:
+            # Second case, only 1 dataframe so return
+            if len(mr) == 1 and type(mr[0]) == pd.DataFrame:
+                return mr[0], out
+
+            # Third case, dataframe and list... need to join the list
+            elif len(mr) == 1 and type(mr[0] == tuple):
+                for elem in mr[0]:
+                    if type(elem) == pd.DataFrame:
+                        out_m_df = elem
+                    elif type(elem) == list:
+                        out_meta.append(elem)
+        return (out_m_df, list(chain(*out_meta))), out
 
 
 class MatrixFormattedGraph(object):
@@ -520,7 +560,7 @@ class MatrixFormattedGraph(object):
         return start_idxs, end_idxs, start_type, end_type, start_ids, end_ids, start_name, end_name
 
     def _process_extraction_results(self, result, metapaths, start_ids, end_ids, start_name, end_name,
-                                    return_sparse=False, verbose=False):
+                                    return_sparse=False, sparse_df=True, verbose=False):
         """
         Internal function to process lists of matrices and metapaths into a DataFrame (or SparseDataFrame) with
         start_node and end_node ids as columns as well as a column for each metapath. Each row will represent the
@@ -536,19 +576,28 @@ class MatrixFormattedGraph(object):
                 time.sleep(0.5)
 
             size = result[0].shape[0]*result[0].shape[1]
-            result = [mt.reshape(res, (size, 1)) for res in tqdm(result)]
+            if verbose:
+                result = [mt.reshape(res, (size, 1)) for res in tqdm(result)]
+            else:
+                result = [mt.reshape(res, (size, 1)) for res in result]
+
             if verbose:
                 print('Stacking columns...')
             result = hstack(result)
-            result = pd.SparseDataFrame(result, columns=metapaths, default_fill_value=0.0)
 
-            if verbose:
-                # Past all the series together into a DataFrame
-                print('\nGenerating DataFrame...')
+            if sparse_df:
+                if verbose:
+                    # Past all the series together into a DataFrame
+                    print('\nGenerating DataFrame...')
+                result = pd.SparseDataFrame(result, columns=metapaths, default_fill_value=0.0)
+
             start_end_df = pd.DataFrame(list(product(start_ids, end_ids)), columns=[start_name, end_name])
-            start_end_df = start_end_df.to_sparse()
 
-            return pd.concat([start_end_df, result], axis=1)
+            # Return a list of the metapath names that indicies correspond to result columns
+            if not sparse_df:
+                return (start_end_df, metapaths), result
+
+            return start_end_df, result
 
         # Turn each result matrix into a series
         if verbose:
@@ -569,7 +618,7 @@ class MatrixFormattedGraph(object):
             print('\nConcatenating series to DataFrame...')
         start_end_df = pd.DataFrame(list(product(start_ids, end_ids)), columns=[start_name, end_name])
 
-        return pd.concat([start_end_df] + result, axis=1)
+        return start_end_df, pd.concat(result, axis=1)
 
     def _get_parallel_arguments(self, metapaths, start_idxs, end_idxs, start_type,
                                 end_type, matrices, verbose, walks=False):
@@ -634,15 +683,15 @@ class MatrixFormattedGraph(object):
         return mats_subset_start, mats_subset_end
 
     def _extract_metapath_feaures(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=True, n_jobs=1,
-                                  return_sparse=False, func=lambda x: x, degree_weighted=True, message='',
-                                  process_result=True):
-        """Internal function for extracting any metapath based feature"""
+                                  return_sparse=False, sparse_df=True, func=lambda x: x, degree_weighted=True,
+                                  message='', process_result=True):
+        """Internal function for extracting any metapath based features"""
         # Validate the given nodes and get information on nodes needed for results formatting.
         start_idxs, end_idxs, start_type, end_type, start_ids, end_ids, start_name, end_name = \
             self.prep_node_info_for_extraction(start_nodes, end_nodes)
 
         # Get all metapaths if none passed
-        if not metapaths:
+        if metapaths is None:
             metapaths = sorted(list(self.metapaths.keys()))
 
         # Choose the correct matrix type for the given feature
@@ -680,7 +729,8 @@ class MatrixFormattedGraph(object):
         # Process and return results
         if process_result:
             results = self._process_extraction_results(result, metapaths, start_ids, end_ids, start_name, end_name,
-                                                       return_sparse=return_sparse, verbose=verbose)
+                                                       return_sparse=return_sparse, sparse_df=sparse_df,
+                                                       verbose=verbose)
         else:
             return result, metapaths
 
@@ -712,7 +762,7 @@ class MatrixFormattedGraph(object):
         end_idx = self.nid_to_index[end_node]
 
         # Get all metapaths if none passed
-        if not metapaths:
+        if metapaths is None:
             metapaths = sorted(list(self.metapaths.keys()))
         # If single metapath passed, make it a list
         if type(metapaths) == str:
@@ -758,7 +808,7 @@ class MatrixFormattedGraph(object):
 
         return out
 
-    def extract_metapath_pair_counts(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=False, n_jobs=1):
+    def extract_metapath_pair_counts(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=True, n_jobs=1):
         """
         Answers the question: For a given metapath and list of start and end nodes, how many start-end node pairs
         have AT LEAST one connecting path of the given metapath.
@@ -771,8 +821,6 @@ class MatrixFormattedGraph(object):
             list, can be IDs corresponding to a subset of ending nodes for the DWPC.
         :param verbose: boolean, if True, prints text and progreess bars.
         :param n_jobs: int, the number of jobs to use for parallel processing.
-        :param return_sparse: boolean, if true, returns a pandas.SparseDataFrame output.  Good if the data size is
-            known to be potentially very large.
 
         :return: pandas.DataFrame, Table of results with columns corresponding to DWPC values from start_id to
             end_id for each metapath.
@@ -785,8 +833,8 @@ class MatrixFormattedGraph(object):
 
         return pd.DataFrame({'mp': metapaths, 'pair_count': counts})
 
-    def extract_dwpc(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=False, n_jobs=1,
-                     return_sparse=False):
+    def extract_dwpc(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=True, n_jobs=1,
+                     return_sparse=False, sparse_df=True):
         """
         Extracts DWPC metrics for the given metapaths.  If no metapaths are given, will calcualte for all metapaths.
 
@@ -799,8 +847,10 @@ class MatrixFormattedGraph(object):
         :param verbose: boolean, if True, prints debugging text for calculating each DWPC. (not optimized for
             parallel processing).
         :param n_jobs: int, the number of jobs to use for parallel processing.
-        :param return_sparse: boolean, if true, returns a pandas.SparseDataFrame output.  Good if the data size is
-            known to be potentially very large.
+        :param return_sparse: boolean, if true, returns a sparse output.  Good if the data size is
+            known to be potentially very large. See parameter `sparse_df` for output options
+        :param sparse_df: boolean, if true, returns a pandas.SparseDataFrame output. If False, returns a
+            scipy.sparse.csc_matrix
 
         :return: pandas.DataFrame, Table of results with columns corresponding to DWPC values from start_id to
             end_id for each metapath.
@@ -808,10 +858,11 @@ class MatrixFormattedGraph(object):
 
         return self._extract_metapath_feaures(metapaths=metapaths, start_nodes=start_nodes, end_nodes=end_nodes,
                                               verbose=verbose, n_jobs=n_jobs, return_sparse=return_sparse,
-                                              func=mt.count_paths, degree_weighted=True, message='DWPC')
+                                              sparse_df=sparse_df, func=mt.count_paths, degree_weighted=True,
+                                              message='DWPC')
 
     def extract_dwwc(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=False, n_jobs=1,
-                     return_sparse=False):
+                     return_sparse=False, sparse_df=True):
         """
         Extracts DWWC metrics for the given metapaths.  If no metapaths are given, will calcualte for all metapaths.
 
@@ -824,8 +875,10 @@ class MatrixFormattedGraph(object):
         :param verbose: boolean, if True, prints debugging text for calculating each DWPC. (not optimized for
             parallel processing).
         :param n_jobs: int, the number of jobs to use for parallel processing.
-        :param return_sparse: boolean, if true, returns a pandas.SparseDataFrame output.  Good if the data size is
-            known to be potentially very large.
+        :param return_sparse: boolean, if true, returns a sparse output.  Good if the data size is
+            known to be potentially very large. See parameter `sparse_df` for output options
+        :param sparse_df: boolean, if true, returns a pandas.SparseDataFrame output. If False, returns a
+            scipy.sparse.csc_matrix
 
         :return: pandas.DataFrame. Table of results with columns corresponding to DWPC values from start_id to
             end_id for each metapath.
@@ -833,10 +886,11 @@ class MatrixFormattedGraph(object):
 
         return self._extract_metapath_feaures(metapaths=metapaths, start_nodes=start_nodes, end_nodes=end_nodes,
                                               verbose=verbose, n_jobs=n_jobs, return_sparse=return_sparse,
-                                              func=mt.count_walks, degree_weighted=True, message='DWWC')
+                                              sparse_df=sparse_df, func=mt.count_walks, degree_weighted=True,
+                                              message='DWWC')
 
     def extract_path_count(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=False, n_jobs=1,
-                           return_sparse=False):
+                           return_sparse=False, sparse_df=True):
         """
         Extracts path counts for the given metapaths.  If no metapaths are given, will calcualte for all metapaths.
 
@@ -849,8 +903,10 @@ class MatrixFormattedGraph(object):
         :param verbose: boolean, if True, prints debugging text for calculating each DWPC. (not optimized for
             parallel processing).
         :param n_jobs: int, the number of jobs to use for parallel processing.
-        :param return_sparse: boolean, if true, returns a pandas.SparseDataFrame output.  Good if the data size is
-            known to be potentially very large.
+        :param return_sparse: boolean, if true, returns a sparse output.  Good if the data size is
+            known to be potentially very large. See parameter `sparse_df` for output options
+        :param sparse_df: boolean, if true, returns a pandas.SparseDataFrame output. If False, returns a
+            scipy.sparse.csc_matrix.
 
         :return: pandas.DataFrame, Table of results with columns corresponding to DWPC values from start_id to
             end_id for each metapath.
@@ -858,7 +914,8 @@ class MatrixFormattedGraph(object):
 
         return self._extract_metapath_feaures(metapaths=metapaths, start_nodes=start_nodes, end_nodes=end_nodes,
                                               verbose=verbose, n_jobs=n_jobs, return_sparse=return_sparse,
-                                              func=mt.count_paths, degree_weighted=False, message='Path Count')
+                                              sparse_df=sparse_df, func=mt.count_paths, degree_weighted=False,
+                                              message='Path Count')
 
     def extract_degrees(self, start_nodes=None, end_nodes=None, subset=None):
         """

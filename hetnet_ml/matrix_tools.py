@@ -4,6 +4,7 @@ import pandas as pd
 from collections import defaultdict
 from itertools import combinations, chain
 from scipy.sparse import diags, eye, csc_matrix, csr_matrix, coo_matrix, lil_matrix
+from scipy.sparse import hstack, vstack
 
 
 def get_path(metapath, metapaths):
@@ -109,21 +110,41 @@ def get_reverse_directed_edge(orig):
 
 
 def get_adj_matrix(dim_0, dim_1, start, end, directed=False, homogeneous=False):
-        """
-        Generates an adjcency matrix of shape (dim_0, dim_1) with values at index matrix[start, end] = 1
-        """
+    """
+    Generates an adjcency matrix of shape (dim_0, dim_1) with values at index matrix[start, end] = 1
+    """
 
-        # Fast generation of a sparse matrix zeros matrix of appropriate dimension
-        mat = lil_matrix(np.zeros((dim_0, dim_1)), shape=(dim_0, dim_1), dtype='int16')
+    # add reverse edge if undirected to same node type
+    if homogeneous and not directed:
+        # need lists for easy concatenation... (trying to be safe with arrays or Series)
+        if not isinstance(start, list):
+            start = start.tolist()
+        if not isinstance(end, list):
+            end = end.tolist()
 
-        # Add edges to the matrix
-        for s, e in zip(start, end):
-            mat[s, e] = 1
-            # add reverse edge if undirected to same node type
-            if homogeneous and not directed:
-                mat[e, s] = 1
+        tmp = start + end
+        end = end + start
+        start = tmp
 
-        return mat.tocsc()
+
+    ones = np.ones(len(start), 'int16')
+    matrix = coo_matrix((ones, (start, end)))
+
+    # Fill any missing rows
+    matirx = matrix.tocsr()
+    diff_0 = (dim_0 - matrix.shape[0])
+    if diff_0 > 0:
+        add = np.zeros((diff_0, matrix.shape[1]))
+        matrix = vstack((matrix, add))
+
+    # Fill any missing Columns
+    matrix = matrix.tocsc()
+    diff_1 = (dim_1 - matrix.shape[1])
+    if diff_1 > 0:
+        add = np.zeros((matrix.shape[0], diff_1))
+        matrix = hstack((matrix, add))
+
+    return matrix.tocsc()
 
 
 def calculate_degrees(matrix):
