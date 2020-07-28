@@ -426,12 +426,15 @@ class MatrixFormattedGraph(object):
             node_degrees[metaedge] = deg
         return node_degrees
 
-    def remove_edges(self, to_remove):
+    def remove_edges(self, to_remove, return_mods=False):
         """
         Removes the given edges from the adjacency matrices. Used for removing holdout set positives from the network
          in a Cross-Validation framework.
 
         :param to_remove: DataFrame subset of edges to be removed
+        :param return_mods: bool, if True, will return a list of metaedge abbrevisons containing the edges modified
+            in this process
+        :return: None or list, depending on the state of return_mods
 
         """
         # validate the incoming removal request
@@ -504,6 +507,8 @@ class MatrixFormattedGraph(object):
         # and Update the edges
         self.adj_matrices = {**self.adj_matrices, **modded_edges}
         self.degree_weighted_matrices = {**self.degree_weighted_matrices, **modded_dw_edges}
+        if return_mods:
+            return [k for k in modded_edges.keys()]
 
     def reset_edges(self):
         """Resets edges altered due to .remove_edges() function to their original values"""
@@ -683,7 +688,7 @@ class MatrixFormattedGraph(object):
         return mats_subset_start, mats_subset_end
 
     def _extract_metapath_feaures(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=True, n_jobs=1,
-                                  return_sparse=False, sparse_df=True, func=lambda x: x, degree_weighted=True,
+                                  return_sparse=False, sparse_df=True, func=lambda x: x, mats=None,
                                   message='', process_result=True):
         """Internal function for extracting any metapath based features"""
         # Validate the given nodes and get information on nodes needed for results formatting.
@@ -693,12 +698,6 @@ class MatrixFormattedGraph(object):
         # Get all metapaths if none passed
         if metapaths is None:
             metapaths = sorted(list(self.metapaths.keys()))
-
-        # Choose the correct matrix type for the given feature
-        if degree_weighted:
-            mats = self.degree_weighted_matrices
-        else:
-            mats = self.adj_matrices
 
         # Prepare functions for parallel processing
         if verbose:
@@ -736,7 +735,7 @@ class MatrixFormattedGraph(object):
 
         return results
 
-    def extract_paths(self, start_node, end_node, metapaths=None, degree_weighted=True, n_jobs=1):
+    def extract_paths(self, start_node, end_node, metapaths=None, mats=None, n_jobs=1):
         """
         Extract the paths between two node for a given set of metapaths.
 
@@ -744,7 +743,8 @@ class MatrixFormattedGraph(object):
         :param end_node: str, the identifier for the ending node in the path
         :param metapaths: list, str, or None. The metapath(s) to extract the exact paths for. If None,
             paths along all metapaths will be extracted
-        :param degree_weighted: bool, if True, path counts returned will show their corresponding degree weights
+        :param mats: dict, key, metaptah abbrev, value matrix. The matrices to use for multiplaction. if None supplied,
+            will use self.degree_weighted_matrices as default.
         :param n_jobs: int, the number of parallel processes to run the extraction on. The jobs are split by metapath
             so having n_jobs > len(meatapths) provides no additional benefit
 
@@ -768,11 +768,8 @@ class MatrixFormattedGraph(object):
         if type(metapaths) == str:
             metapaths = [metapaths]
 
-        # Choose the correct matrix type for the given feature
-        if degree_weighted:
+        if mats is None:
             mats = self.degree_weighted_matrices
-        else:
-            mats = self.adj_matrices
 
         arguments = []
         path_nodes = {}
@@ -828,7 +825,7 @@ class MatrixFormattedGraph(object):
 
         counts, metapaths = self._extract_metapath_feaures(metapaths=metapaths, start_nodes=start_nodes,
                                                            end_nodes=end_nodes, verbose=verbose, n_jobs=n_jobs,
-                                                           func=mt.count_metapath_paris, degree_weighted=False,
+                                                           func=mt.count_metapath_paris, mats=self.adj_matrices,
                                                            message='Metapath Pair Count', process_result=False)
 
         return pd.DataFrame({'mp': metapaths, 'pair_count': counts})
@@ -858,7 +855,7 @@ class MatrixFormattedGraph(object):
 
         return self._extract_metapath_feaures(metapaths=metapaths, start_nodes=start_nodes, end_nodes=end_nodes,
                                               verbose=verbose, n_jobs=n_jobs, return_sparse=return_sparse,
-                                              sparse_df=sparse_df, func=mt.count_paths, degree_weighted=True,
+                                              sparse_df=sparse_df, func=mt.count_paths, mats=self.degree_weighted_matrices,
                                               message='DWPC')
 
     def extract_dwwc(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=False, n_jobs=1,
@@ -886,7 +883,7 @@ class MatrixFormattedGraph(object):
 
         return self._extract_metapath_feaures(metapaths=metapaths, start_nodes=start_nodes, end_nodes=end_nodes,
                                               verbose=verbose, n_jobs=n_jobs, return_sparse=return_sparse,
-                                              sparse_df=sparse_df, func=mt.count_walks, degree_weighted=True,
+                                              sparse_df=sparse_df, func=mt.count_walks, mats=self.adj_matrices,
                                               message='DWWC')
 
     def extract_path_count(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=False, n_jobs=1,
@@ -914,7 +911,7 @@ class MatrixFormattedGraph(object):
 
         return self._extract_metapath_feaures(metapaths=metapaths, start_nodes=start_nodes, end_nodes=end_nodes,
                                               verbose=verbose, n_jobs=n_jobs, return_sparse=return_sparse,
-                                              sparse_df=sparse_df, func=mt.count_paths, degree_weighted=False,
+                                              sparse_df=sparse_df, func=mt.count_paths, mats=self.adj_matrices,
                                               message='Path Count')
 
     def extract_degrees(self, start_nodes=None, end_nodes=None, subset=None):
@@ -1122,4 +1119,165 @@ class MatrixFormattedGraph(object):
 
         return blacklist
 
+class MatrixFormattedWeightedGraph(MatrixFormattedGraph):
+
+    def __init__(self, nodes, edges, weights='weight', start_kind='Compound', end_kind='Disease',
+                 max_length=4, w=0.4, n_jobs=1):
+        """
+        Initializes the adjacency matrices used for feature extraction.
+
+        :param nodes: DataFrame or string, location of the .csv file containing nodes formatted for neo4j import.
+            This format must include two required columns: One column labeled ':ID' with the unique id for each
+            node, and one column named ':LABEL' containing the metanode type for each node
+        :param edges: DataFrame or string, location of the .csv file containing edges formatted for neo4j import.
+            This format must include three required columns: One column labeled  ':START_ID' with the node id
+            for the start of the edge, one labeled ':END_ID' with teh node id for the end of the edge and one
+            labeled ':TYPE' describing the metaedge type.
+        :param weights: string or iterable. If string, must correspond to columname in edges data_frame with
+            weights in the column
+        :param start_kind: string, the source metanode. The node type from which the target edge to be predicted
+            as well as all metapaths originate.
+        :param end_kind: string, the target metanode. The node type to which the target edge to be predicted
+            as well as all metapaths terminate.
+        :param max_length: int, the maximum length of metapaths to be extracted by this feature extractor.
+        :param w: float between 0 and 1. Dampening factor for producing degree-weighted matrices
+        :param n_jobs: int, the number of jobs to use for parallel processing.
+        """
+
+        super().__init__(nodes, edges, start_kind, end_kind, max_length, w, n_jobs)
+
+        # Validate the weights
+        if isinstance(weights, str):
+            # Make sure that the weights is in the column
+            assert weights in self.edge_df.columns
+            # Ensure that weights are numberic
+            assert np.issubdtype(self.edge_df[weights].dtype, np.number)
+            # Store the column name
+            self.weights = weights
+
+        elif isinstance(weights, collections.Iterable):
+            # Ensure that there's a weight for every edge
+            assert len(weights) == len(self.edge_df)
+            # Make sure the weights are numbers
+            assert all(isinstance(w, (int, float)) for w in weights)
+            # Store the weights and columname
+            self.edge_df['weight'] = weights
+            self.weights = 'weight'
+
+        # Make special matrices required for weighted calculations
+        self._generate_weighted_adj_matrices()
+        self._degree_weight_weighted_matrices()
+        self._modified_weighted_adj_matrices = None
+
+
+    def _generate_weighted_adj_matrices(self):
+        """Generates weighted adjacency matrices for performing path and walk count operations."""
+        self.weighted_adj_matrices = dict()
+        mes = []
+        args = []
+        for metaedge in self.metaedges:
+            mes.append(metaedge)
+            args.append(self._prepare_parallel_weighted_adj_matrix_args(self.edge_df.query('abbrev == @metaedge')))
+        res = parallel_process(array=args, function=mt.get_adj_matrix, use_kwargs=True, n_jobs=self.n_jobs,
+                               front_num=0)
+        for metaedge, matrix in zip(mes, res):
+            self.weighted_adj_matrices[metaedge] = matrix
+
+    def _prepare_parallel_weighted_adj_matrix_args(self, edge):
+        weights = edge[self.weights].values
+
+        args = self._prepare_parallel_adj_matrix_args(edge)
+        args['weights'] = weights
+
+        return args
+
+    def _degree_weight_weighted_matrices(self):
+        """Quickly combine Degree weights with edge weights"""
+        for meta_edge, matrix in self.degree_weighted_matrices.items():
+            self.degree_weighted_matrices[meta_edge] = matrix.multiply(self.weighted_adj_matrices[meta_edge])
+
+    def remove_edges(self, to_remove, return_mods=False):
+        # Modify the adjacency matrices and get update Degree weighted matrices
+        modded_edges = super().remove_edges(to_remove, True)
+
+        # Update the weighted matrices with new degree weights ased on removed edges
+        for e in modded_edges:
+            self.degree_weighted_matrices[e] = self.degree_weighted_matrices[e].multiply(self.weighted_adj_matrices[e])
+
+        # Cache the original weighted edges
+        self._modified_weighted_adj_matrices = {k: v for k, v in self.weighted_adj_matrices.items() if k in modded_edges}
+
+        # Update the weighted matrices with the removed edges
+        for e in modded_edges:
+            self.weighted_adj_matrices[e] = self.adj_matrices[e].multiply(self.weighted_adj_matrices[e])
+
+        if return_mods:
+            return modded_edges
+
+    def update_w(self, w):
+        # once we get new DW matrices, multiply by weights
+        super().update_w(w)
+        self._degree_weight_weighted_matrices()
+
+    def reset_edges(self):
+        super().reset_edges()
+        self.weighted_adj_matrices = {**self.weighted_adj_matrices, **self._modified_weighted_adj_matrices}
+        self._modified_weighted_adj_matrices = None
+
+    def extract_weighted_path_count(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=False, n_jobs=1,
+                                    return_sparse=False, sparse_df=True):
+        """
+        Extracts path counts for the given metapaths.  If no metapaths are given, will calcualte for all metapaths.
+
+        :param metapaths: list or None, the metapaths paths to calculate DWPC values for. If None, will calculate
+            Path Count values for metapaths in this class (self.metapaths).
+        :param start_nodes: String or list, String title of the metanode start of the metapaths.
+            If a list, can be IDs corresponding to a subset of starting nodes for the DWPC.
+        :param end_nodes: String or list, String title of the metanode for the end of the metapaths.  If a
+            list, can be IDs corresponding to a subset of ending nodes for the DWPC.
+        :param verbose: boolean, if True, prints debugging text for calculating each DWPC. (not optimized for
+            parallel processing).
+        :param n_jobs: int, the number of jobs to use for parallel processing.
+        :param return_sparse: boolean, if true, returns a sparse output.  Good if the data size is
+            known to be potentially very large. See parameter `sparse_df` for output options
+        :param sparse_df: boolean, if true, returns a pandas.SparseDataFrame output. If False, returns a
+            scipy.sparse.csc_matrix.
+
+        :return: pandas.DataFrame, Table of results with columns corresponding to DWPC values from start_id to
+            end_id for each metapath.
+        """
+
+        return self._extract_metapath_feaures(metapaths=metapaths, start_nodes=start_nodes, end_nodes=end_nodes,
+                                              verbose=verbose, n_jobs=n_jobs, return_sparse=return_sparse,
+                                              sparse_df=sparse_df, func=mt.count_paths, mats=self.weighted_adj_matrices,
+                                              message='Weighted Path Count')
+
+
+    def extract_weighted_walk_count(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=False, n_jobs=1,
+                                    return_sparse=False, sparse_df=True):
+        """
+        Extracts path counts for the given metapaths.  If no metapaths are given, will calcualte for all metapaths.
+
+        :param metapaths: list or None, the metapaths paths to calculate DWPC values for. If None, will calculate
+            Path Count values for metapaths in this class (self.metapaths).
+        :param start_nodes: String or list, String title of the metanode start of the metapaths.
+            If a list, can be IDs corresponding to a subset of starting nodes for the DWPC.
+        :param end_nodes: String or list, String title of the metanode for the end of the metapaths.  If a
+            list, can be IDs corresponding to a subset of ending nodes for the DWPC.
+        :param verbose: boolean, if True, prints debugging text for calculating each DWPC. (not optimized for
+            parallel processing).
+        :param n_jobs: int, the number of jobs to use for parallel processing.
+        :param return_sparse: boolean, if true, returns a sparse output.  Good if the data size is
+            known to be potentially very large. See parameter `sparse_df` for output options
+        :param sparse_df: boolean, if true, returns a pandas.SparseDataFrame output. If False, returns a
+            scipy.sparse.csc_matrix.
+
+        :return: pandas.DataFrame, Table of results with columns corresponding to DWPC values from start_id to
+            end_id for each metapath.
+        """
+
+        return self._extract_metapath_feaures(metapaths=metapaths, start_nodes=start_nodes, end_nodes=end_nodes,
+                                              verbose=verbose, n_jobs=n_jobs, return_sparse=return_sparse,
+                                              sparse_df=sparse_df, func=mt.count_walks, mats=self.weighted_adj_matrices,
+                                              message='Weighted Walk Count')
 

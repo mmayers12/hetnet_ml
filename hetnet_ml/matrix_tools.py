@@ -109,9 +109,10 @@ def get_reverse_directed_edge(orig):
         return orig[start_node[0]: start_node[-1] + 1] + orig[edge[0]: edge[-1] + 1] + '>' + orig_spl[0]
 
 
-def get_adj_matrix(dim_0, dim_1, start, end, directed=False, homogeneous=False):
+def get_adj_matrix(dim_0, dim_1, start, end, directed=False, homogeneous=False, weights=None):
     """
-    Generates an adjcency matrix of shape (dim_0, dim_1) with values at index matrix[start, end] = 1
+    Generates an adjcency matrix of shape (dim_0, dim_1) with values at index matrix[start, end] = weight
+    if weights is None, weights = 1. Start, end, and weights must be of the same length.
     """
 
     # add reverse edge if undirected to same node type
@@ -121,14 +122,26 @@ def get_adj_matrix(dim_0, dim_1, start, end, directed=False, homogeneous=False):
             start = start.tolist()
         if not isinstance(end, list):
             end = end.tolist()
+        if weights is not None:
+            if not isinstance(weights, list):
+                weights = weights.tolist()
+            weights = weights + weights
 
         tmp = start + end
         end = end + start
         start = tmp
 
-
-    ones = np.ones(len(start), 'int16')
-    matrix = coo_matrix((ones, (start, end)))
+    if weights is not None:
+        # Weights needs to be a numpy array
+        if isinstance(weights, list):
+            weights = np.array(weights)
+        elif isinstance(weights, pd.Series):
+            weights = weights.values
+        weights = weights.astype('float32')
+        matrix = coo_matrix((weights, (start, end)))
+    else:
+        ones = np.ones(len(start), 'int16')
+        matrix = coo_matrix((ones, (start, end)))
 
     # Fill any missing rows
     matirx = matrix.tocsr()
