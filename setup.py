@@ -15,7 +15,7 @@ setup(
     author='Mike Mayers',
     author_email='mmayers@scripps.edu',
     url='https://github.com/mmayers12/hetnet_ml',
-    version='0.1.0',
+    version='0.1.1',
     packages=['hetnet_ml'],
     license='LICENSE',
     description='Matrix-based feature extraction for Hetnets',

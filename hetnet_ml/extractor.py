@@ -158,6 +158,8 @@ class MatrixFormattedGraph(object):
         self.metanode_to_edges = dict()
         self._modified_edges = None
         self._weighted_modified_edges = None
+        self._orig_in_degree = dict()
+        self._orig_out_degree = dict()
 
         # Read and/or store nodes as DataFrame
         if type(nodes) == str:
@@ -489,6 +491,13 @@ class MatrixFormattedGraph(object):
         # Prepare the Args for degree weighted calulations
         args = []
         for (metaedge, matrix), (out_degree, in_degree) in zip(modded_edges.items(), res):
+            # Store the original and new degrees
+            self._orig_in_degree[metaedge] = self.in_degree[metaedge]
+            self._orig_out_degree[metaedge] = self.out_degree[metaedge]
+            self.in_degree[metaedge] = in_degree
+            self.out_degree[metaedge] = out_degree
+
+            # Add the arguments to the function
             args.append({'matrix': matrix, 'w': self.w, 'degree_fwd': out_degree,
                          'degree_rev': in_degree})
         res = parallel_process(array=args, function=mt.weight_by_degree, use_kwargs=True, n_jobs=self.n_jobs,
@@ -520,10 +529,14 @@ class MatrixFormattedGraph(object):
         # Restore the former value from cache
         self.adj_matrices = {**self.adj_matrices, **self._modified_edges}
         self.degree_weighted_matrices = {**self.degree_weighted_matrices, **self._weighted_modified_edges}
+        self.in_degree = {**self.in_degree, **self._orig_in_degree}
+        self.out_degree = {**self.out_degree, **self._orig_out_degree}
 
-        # Reset the edge cache
+        # Reset the edge and degree cache
         self._modified_edges = None
         self._weighted_modified_edges = None
+        self._orig_in_degree = dict()
+        self._orig_out_degree = dict()
 
     def prep_node_info_for_extraction(self, start_nodes=None, end_nodes=None):
         """
@@ -1122,7 +1135,7 @@ class MatrixFormattedGraph(object):
 class MatrixFormattedWeightedGraph(MatrixFormattedGraph):
 
     def __init__(self, nodes, edges, weights='weight', start_kind='Compound', end_kind='Disease',
-                 max_length=4, w=0.4, n_jobs=1):
+                 scale_weights=True, max_length=4, w=0.4, n_jobs=1):
         """
         Initializes the adjacency matrices used for feature extraction.
 
@@ -1163,11 +1176,33 @@ class MatrixFormattedWeightedGraph(MatrixFormattedGraph):
             # Store the weights and columname
             self.edge_df['weight'] = weights
             self.weights = 'weight'
+        self.scale_weights = scale_weights
+        if self.scale_weights:
+            self.orig_weights = self.weights
+            self._scale_weights_to_degree()
+            self._scaling_skipped = False
 
         # Make special matrices required for weighted calculations
         self._generate_weighted_adj_matrices()
         self._degree_weight_weighted_matrices()
         self._modified_weighted_adj_matrices = None
+
+    def _scale_weights_to_degree(self, w=None):
+        """Uses the mean of degrees to scale the weights to a similar scale as that of dwpc"""
+        in_mean_deg = np.mean([arr[arr.nonzero()].mean() for arr in self.in_degree.values()])
+        out_mean_deg = np.mean([arr[arr.nonzero()].mean() for arr in self.out_degree.values()])
+
+        # allow for other w values to be based (e.g. when w is updated for the class)
+        if w is None:
+            w = self.w
+        # Find our current minium weight, and target weight (based off of mean degree-weighted weight
+        min_weight = self.edge_df[self.orig_weights].min()
+        target_weight = (in_mean_deg**(-1*w)) * (out_mean_deg**(-1*w))
+
+        # Exponent = log base minium weight of target weight
+        scale_exponent = np.log(target_weight) / np.log(min_weight)
+        self.edge_df['scal_weight'] = self.edge_df[self.orig_weights]**scale_exponent
+        self.weights = 'scal_weight'
 
 
     def _generate_weighted_adj_matrices(self):
@@ -1196,32 +1231,75 @@ class MatrixFormattedWeightedGraph(MatrixFormattedGraph):
         for meta_edge, matrix in self.degree_weighted_matrices.items():
             self.degree_weighted_matrices[meta_edge] = matrix.multiply(self.weighted_adj_matrices[meta_edge])
 
-    def remove_edges(self, to_remove, return_mods=False):
+    def remove_edges(self, to_remove, return_mods=False, skip_scaling=False):
+        """
+        Remove edges from the graph. Useful for cross-validation settings
+        where specific edges part of the test set are to be removed. If has
+        already been run once on the class, you must use reset_edges() fucntion
+        before more can be removed.
+
+        :param to_remove: edges to remove from the graph
+        :param return_mods: bool, if true, returs list of metaedges that were
+            modified
+        :param skip_scaling: bool, if scaling weights is enabled (in class
+            definition), will skip recalcuating the weights. This saves compute
+            time and rescaling is really only needed if a large number of edges
+            are removed, therefore the average degree of a node is quite
+            different.
+        """
         # Modify the adjacency matrices and get update Degree weighted matrices
         modded_edges = super().remove_edges(to_remove, True)
+
+        # Cache the original weighted edges
+        self._modified_weighted_adj_matrices = {k: v for k, v in self.weighted_adj_matrices.items() if k in modded_edges}
+
+        # With edges removed, mean degree will change, so weight scaling may need to be updated
+        if self.scale_weights:
+            # Skip the scaling and flag so we don't accidently rescale on reset
+            if skip_scaling:
+                self.scaling_skipped = True
+            else:
+                # dont skip the scaling, (time consuming)
+                self._scale_weights_to_degree()
+                self._generate_weighted_adj_matrices()
+                self.scaling_skipped = False
+        else:
+            # Update the weighted matrices with the removed edges
+            for e in modded_edges:
+                self.weighted_adj_matrices[e] = self.adj_matrices[e].multiply(self.weighted_adj_matrices[e])
 
         # Update the weighted matrices with new degree weights ased on removed edges
         for e in modded_edges:
             self.degree_weighted_matrices[e] = self.degree_weighted_matrices[e].multiply(self.weighted_adj_matrices[e])
 
-        # Cache the original weighted edges
-        self._modified_weighted_adj_matrices = {k: v for k, v in self.weighted_adj_matrices.items() if k in modded_edges}
-
-        # Update the weighted matrices with the removed edges
-        for e in modded_edges:
-            self.weighted_adj_matrices[e] = self.adj_matrices[e].multiply(self.weighted_adj_matrices[e])
-
         if return_mods:
             return modded_edges
 
     def update_w(self, w):
+        """Change the value of the damping exponent w"""
+        # Need to update the scaled weights
+        if self.scale_weights:
+            self._scale_weights_to_degree(w)
+            self._generate_weighted_adj_matrices()
         # once we get new DW matrices, multiply by weights
         super().update_w(w)
         self._degree_weight_weighted_matrices()
 
     def reset_edges(self):
+        """Resets edges that have been removed with the remove_edges() function"""
         super().reset_edges()
-        self.weighted_adj_matrices = {**self.weighted_adj_matrices, **self._modified_weighted_adj_matrices}
+
+        # If we're in default state, notheing to rest
+        if self._modified_weighted_adj_matrices is None:
+            return
+
+        # Degrees are reset, so we need to reset the original weight scaling
+        if self.scale_weights and not self.scaling_skipped:
+            self._scale_weights_to_degree()
+            self._generate_weighted_adj_matrices()
+        else:
+            # No weight scaling so just load prev values from cache
+            self.weighted_adj_matrices = {**self.weighted_adj_matrices, **self._modified_weighted_adj_matrices}
         self._modified_weighted_adj_matrices = None
 
     def extract_weighted_path_count(self, metapaths=None, start_nodes=None, end_nodes=None, verbose=False, n_jobs=1,
