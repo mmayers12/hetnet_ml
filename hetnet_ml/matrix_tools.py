@@ -137,7 +137,7 @@ def get_adj_matrix(dim_0, dim_1, start, end, directed=False, homogeneous=False, 
             weights = np.array(weights)
         elif isinstance(weights, pd.Series):
             weights = weights.values
-        weights = weights.astype('float32')
+        weights = weights.astype('float64')
         matrix = coo_matrix((weights, (start, end)))
     else:
         ones = np.ones(len(start), 'int16')
@@ -191,7 +191,7 @@ def weight_by_degree(matrix, w=0.4, degree_fwd=None, degree_rev=None):
     matrix_out = matrix.T.multiply(weighted_degree_fwd)
     matrix_out = matrix_out.T.multiply(weighted_degree_rev)
 
-    return matrix_out.astype('float32').tocsc()
+    return matrix_out.astype('float64').tocsc()
 
 
 def count_walks(to_multiply):
